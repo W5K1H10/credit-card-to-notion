@@ -123,6 +123,11 @@
                     <input type="text" id="cors-proxy" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50" placeholder="https://your-cors-proxy.workers.dev">
                     <p class="text-xs text-gray-500 mt-1">若您有自己的CORS代理，可在此填入。若留空，將嘗試使用預設代理</p>
                 </div>
+                <div class="mt-4">
+                    <button id="test-connection" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-1 px-3 rounded text-sm">
+                        測試連接
+                    </button>
+                </div>
             </div>
             
             <div class="overflow-x-auto">
@@ -131,7 +136,7 @@
                         <tr>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">名稱</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">金額</th>
-                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">交易日期</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">日期</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">類別</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">付款方式</th>
@@ -181,6 +186,26 @@
                     <p id="error-details" class="text-sm"></p>
                 </div>
                 <button id="close-error" class="ml-auto">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- 成功訊息區域 -->
+        <div id="success-alert" class="fixed bottom-20 right-4 max-w-md p-4 bg-green-100 border border-green-400 text-green-700 rounded shadow-lg hidden">
+            <div class="flex">
+                <div class="py-1 mr-2">
+                    <svg class="h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                </div>
+                <div>
+                    <p id="success-message" class="font-bold"></p>
+                    <p id="success-details" class="text-sm"></p>
+                </div>
+                <button id="close-success" class="ml-auto">
                     <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
@@ -268,6 +293,96 @@
             setTimeout(() => {
                 errorAlert.classList.add('hidden');
             }, 5000);
+        }
+        
+        // 顯示成功訊息
+        function showSuccess(message, details = "") {
+            const successAlert = document.getElementById('success-alert');
+            const successMessage = document.getElementById('success-message');
+            const successDetails = document.getElementById('success-details');
+            
+            successMessage.textContent = message;
+            successDetails.textContent = details;
+            
+            successAlert.classList.remove('hidden');
+            
+            // 5秒後自動隱藏
+            setTimeout(() => {
+                successAlert.classList.add('hidden');
+            }, 5000);
+        }
+
+        // 診斷 Notion 連接問題
+        async function diagnoseNotionConnection(notionToken, databaseId) {
+          try {
+            // 步驟 1: 測試 API 密鑰有效性
+            const proxy = await getWorkingProxy();
+            const userUrl = `${proxy}${NOTION_API_BASE}/users/me`;
+            
+            console.log("測試 API 密鑰...");
+            const userResponse = await fetch(userUrl, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${notionToken}`,
+                'Notion-Version': NOTION_VERSION
+              }
+            });
+            
+            if (!userResponse.ok) {
+              if (userResponse.status === 401) {
+                return { success: false, error: "API 密鑰無效或過期" };
+              } else {
+                const errorData = await userResponse.json();
+                return { success: false, error: `API 錯誤: ${errorData.message || userResponse.status}` };
+              }
+            }
+            
+            // 步驟 2: 測試資料庫訪問
+            console.log("測試資料庫訪問...");
+            const dbUrl = `${proxy}${NOTION_API_BASE}/databases/${databaseId}`;
+            
+            const dbResponse = await fetch(dbUrl, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${notionToken}`,
+                'Notion-Version': NOTION_VERSION
+              }
+            });
+            
+            if (!dbResponse.ok) {
+              if (dbResponse.status === 404) {
+                return { success: false, error: "找不到資料庫，請檢查資料庫 ID 是否正確" };
+              } else if (dbResponse.status === 403) {
+                return { success: false, error: "沒有權限訪問此資料庫，請確保已共享給您的整合" };
+              } else {
+                const errorData = await dbResponse.json();
+                return { success: false, error: `資料庫訪問錯誤: ${errorData.message || dbResponse.status}` };
+              }
+            }
+            
+            // 步驟 3: 檢查資料庫結構
+            const dbData = await dbResponse.json();
+            const requiredProperties = ['名稱', '金額', '日期', '類別', '備註', '付款方式'];
+            const missingProperties = [];
+            
+            for (const prop of requiredProperties) {
+              if (!dbData.properties[prop]) {
+                missingProperties.push(prop);
+              }
+            }
+            
+            if (missingProperties.length > 0) {
+              return { 
+                success: false, 
+                error: `資料庫缺少必要欄位: ${missingProperties.join(', ')}` 
+              };
+            }
+            
+            return { success: true, message: "連接成功！API 密鑰有效，資料庫可訪問，結構正確。" };
+            
+          } catch (error) {
+            return { success: false, error: `診斷過程中發生錯誤: ${error.message}` };
+          }
         }
 
         // 更新商家分類對照表以匹配Notion中的固定類別
@@ -372,10 +487,59 @@
                 const imageUploadButton = document.getElementById('image-upload-button');
                 const dropZone = document.getElementById('drop-zone');
                 const closeError = document.getElementById('close-error');
+                const closeSuccess = document.getElementById('close-success');
+                const testConnection = document.getElementById('test-connection');
                 
                 // 關閉錯誤訊息
                 closeError.addEventListener('click', function() {
                     document.getElementById('error-alert').classList.add('hidden');
+                });
+                
+                // 關閉成功訊息
+                closeSuccess.addEventListener('click', function() {
+                    document.getElementById('success-alert').classList.add('hidden');
+                });
+                
+                // 測試連接按鈕
+                testConnection.addEventListener('click', async function() {
+                    try {
+                        const notionToken = document.getElementById('notion-token').value.trim();
+                        const databaseId = document.getElementById('database-id').value.trim();
+                        
+                        if (!notionToken) {
+                            showError('請輸入 Notion API 密鑰');
+                            document.getElementById('notion-token').focus();
+                            return;
+                        }
+                        
+                        if (!databaseId) {
+                            showError('請輸入 Notion 資料庫 ID');
+                            document.getElementById('database-id').focus();
+                            return;
+                        }
+                        
+                        // 檢查API密鑰格式
+                        if (!notionToken.startsWith('secret_')) {
+                            showError('Notion API 密鑰格式錯誤', '應以 secret_ 開頭');
+                            document.getElementById('notion-token').focus();
+                            return;
+                        }
+                        
+                        showLoading(true, '測試連接中...');
+                        
+                        const result = await diagnoseNotionConnection(notionToken, databaseId);
+                        
+                        if (result.success) {
+                            showSuccess('連接成功', result.message);
+                        } else {
+                            showError('連接失敗', result.error);
+                        }
+                    } catch (error) {
+                        console.error("測試連接時出錯:", error);
+                        showError('測試連接時出錯', error.message);
+                    } finally {
+                        showLoading(false);
+                    }
                 });
                 
                 // 上傳按鈕點擊事件
@@ -776,7 +940,7 @@
                         transactions.push({
                             name: description,
                             amount: amount,
-                            transactionDate: transactionDate,
+                            date: transactionDate,
                             category: category,
                             note: '',
                             paymentMethod: '信用卡'
@@ -803,7 +967,7 @@
                             transactions.push({
                                 name: description,
                                 amount: amount,
-                                transactionDate: transactionDate,
+                                date: transactionDate,
                                 category: category,
                                 note: '',
                                 paymentMethod: '信用卡'
@@ -830,7 +994,7 @@
                             transactions.push({
                                 name: description,
                                 amount: amount,
-                                transactionDate: transactionDate,
+                                date: transactionDate,
                                 category: category,
                                 note: '自動識別，請確認',
                                 paymentMethod: '信用卡'
@@ -868,10 +1032,10 @@
                     amountCell.textContent = transaction.amount.toFixed(2);
                     row.appendChild(amountCell);
 
-                    // 交易日期
+                    // 日期
                     const dateCell = document.createElement('td');
                     dateCell.className = 'px-3 py-2 text-sm';
-                    dateCell.textContent = transaction.transactionDate;
+                    dateCell.textContent = transaction.date;
                     row.appendChild(dateCell);
 
                     // 類別
@@ -981,22 +1145,6 @@
             }
         }
 
-        // 檢查資料庫訪問權限
-        async function checkDatabaseAccess(token, databaseId) {
-            try {
-                await callNotionAPI(`databases/${databaseId}`, 'GET', token);
-                return { success: true };
-            } catch (error) {
-                if (error.message.includes('object_not_found')) {
-                    return { success: false, message: '找不到資料庫，請檢查資料庫ID是否正確' };
-                } else if (error.message.includes('unauthorized')) {
-                    return { success: false, message: 'API密鑰無效或權限不足' };
-                } else {
-                    return { success: false, message: `無法訪問資料庫: ${error.message}` };
-                }
-            }
-        }
-
         // 創建Notion頁面
         async function createNotionPage(token, databaseId, transaction) {
             try {
@@ -1005,7 +1153,7 @@
                     properties: {
                         名稱: { title: [{ text: { content: transaction.name } }] },
                         金額: { number: transaction.amount },
-                        交易日期: { date: { start: transaction.transactionDate } },
+                        日期: { date: { start: transaction.date } },
                         類別: { select: { name: transaction.category } },
                         備註: { rich_text: [{ text: { content: transaction.note || '' } }] },
                         付款方式: { select: { name: transaction.paymentMethod } },
@@ -1049,9 +1197,9 @@
                 
                 // 首先檢查資料庫訪問權限
                 showLoading(true, '驗證Notion API資訊...');
-                const dbCheckResult = await checkDatabaseAccess(notionToken, databaseId);
+                const dbCheckResult = await diagnoseNotionConnection(notionToken, databaseId);
                 if (!dbCheckResult.success) {
-                    throw new Error(dbCheckResult.message);
+                    throw new Error(dbCheckResult.error);
                 }
                 
                 // 處理成功及失敗數量統計
