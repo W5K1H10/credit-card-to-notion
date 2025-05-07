@@ -17,7 +17,6 @@
             padding-bottom: 80px;
         }
         .loading {
-            display: none;
             position: fixed;
             top: 0;
             left: 0;
@@ -25,9 +24,10 @@
             height: 100%;
             background-color: rgba(0, 0, 0, 0.5);
             z-index: 100;
-            display: flex;
+            display: none;
             justify-content: center;
             align-items: center;
+            flex-direction: column;
         }
         .loading-spinner {
             border: 5px solid #f3f3f3;
@@ -36,6 +36,11 @@
             width: 50px;
             height: 50px;
             animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        .loading-text {
+            color: white;
+            font-weight: bold;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -59,6 +64,7 @@
 <body class="bg-gray-100">
     <div id="loading" class="loading">
         <div class="loading-spinner"></div>
+        <div class="loading-text">處理中，請稍候...</div>
     </div>
 
     <header class="bg-blue-600 text-white p-4 shadow">
@@ -115,7 +121,7 @@
                 <div class="mt-2">
                     <label class="block text-sm font-medium text-gray-700">CORS 代理 URL (選填)</label>
                     <input type="text" id="cors-proxy" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50" placeholder="https://your-cors-proxy.workers.dev">
-                    <p class="text-xs text-gray-500 mt-1">若您有自己的CORS代理，可在此填入。若留空，將使用預設代理</p>
+                    <p class="text-xs text-gray-500 mt-1">若您有自己的CORS代理，可在此填入。若留空，將嘗試使用預設代理</p>
                 </div>
             </div>
             
@@ -161,6 +167,26 @@
                 </button>
             </div>
         </section>
+        
+        <!-- 錯誤訊息區域 -->
+        <div id="error-alert" class="fixed bottom-20 right-4 max-w-md p-4 bg-red-100 border border-red-400 text-red-700 rounded shadow-lg hidden">
+            <div class="flex">
+                <div class="py-1 mr-2">
+                    <svg class="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </div>
+                <div>
+                    <p id="error-message" class="font-bold"></p>
+                    <p id="error-details" class="text-sm"></p>
+                </div>
+                <button id="close-error" class="ml-auto">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </div>
     </main>
 
     <footer class="fixed bottom-0 w-full bg-white p-4 border-t border-gray-200 text-sm text-center text-gray-600">
@@ -174,42 +200,74 @@
         // 預設CORS代理（有多個選項，以備一個不可用時）
         const DEFAULT_PROXIES = [
             "https://corsproxy.io/?",
-            "https://cors-anywhere.herokuapp.com/",
-            "https://api.allorigins.win/raw?url="
+            "https://api.allorigins.win/raw?url=",
+            "https://cors-anywhere.herokuapp.com/"
         ];
         
         // Notion API端點
         const NOTION_API_BASE = "https://api.notion.com/v1";
         const NOTION_VERSION = "2022-06-28";
         
+        // 設置處理超時
+        const PROCESSING_TIMEOUT = 60000; // 60秒
+        let processingTimeoutId = null;
+        
         // 選擇可用的CORS代理
         async function getWorkingProxy() {
-            // 先檢查用戶是否提供了自定義代理
-            const customProxy = document.getElementById('cors-proxy').value.trim();
-            if (customProxy) {
-                // 確保代理URL以/結尾
-                return customProxy.endsWith('/') ? customProxy : customProxy + '/';
-            }
-            
-            // 測試預設代理
-            for (const proxy of DEFAULT_PROXIES) {
-                try {
-                    const testUrl = `${proxy}https://api.notion.com/`;
-                    const response = await fetch(testUrl, {
-                        method: 'HEAD',
-                        timeout: 3000
-                    }).catch(() => null);
-                    
-                    if (response && response.status !== 429) { // 429 是 Too Many Requests
-                        return proxy;
-                    }
-                } catch (error) {
-                    console.log(`代理 ${proxy} 不可用`, error);
+            try {
+                // 先檢查用戶是否提供了自定義代理
+                const customProxy = document.getElementById('cors-proxy')?.value?.trim();
+                if (customProxy) {
+                    // 確保代理URL以/結尾
+                    return customProxy.endsWith('/') ? customProxy : customProxy + '/';
                 }
+                
+                // 測試預設代理
+                for (const proxy of DEFAULT_PROXIES) {
+                    try {
+                        const testUrl = `${proxy}https://httpbin.org/get`;
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 5000);
+                        
+                        const response = await fetch(testUrl, {
+                            method: 'GET',
+                            signal: controller.signal
+                        });
+                        
+                        clearTimeout(timeoutId);
+                        
+                        if (response.ok) {
+                            console.log(`使用代理: ${proxy}`);
+                            return proxy;
+                        }
+                    } catch (error) {
+                        console.log(`代理 ${proxy} 不可用`, error);
+                    }
+                }
+            } catch (error) {
+                console.error("選擇代理時出錯:", error);
             }
             
             // 如果所有代理都不可用，使用第一個（會提示用戶出錯）
+            console.warn("所有代理都不可用，使用默認代理");
             return DEFAULT_PROXIES[0];
+        }
+
+        // 顯示錯誤訊息
+        function showError(message, details = "") {
+            const errorAlert = document.getElementById('error-alert');
+            const errorMessage = document.getElementById('error-message');
+            const errorDetails = document.getElementById('error-details');
+            
+            errorMessage.textContent = message;
+            errorDetails.textContent = details;
+            
+            errorAlert.classList.remove('hidden');
+            
+            // 5秒後自動隱藏
+            setTimeout(() => {
+                errorAlert.classList.add('hidden');
+            }, 5000);
         }
 
         // 更新商家分類對照表以匹配Notion中的固定類別
@@ -255,12 +313,18 @@
 
         // 根據商家名稱分類交易
         function categorizeTransaction(description) {
-            description = description.toUpperCase();
-            
-            for (const [keyword, category] of Object.entries(categoryMap)) {
-                if (description.includes(keyword.toUpperCase())) {
-                    return category;
+            try {
+                if (!description) return '其他';
+                
+                description = description.toUpperCase();
+                
+                for (const [keyword, category] of Object.entries(categoryMap)) {
+                    if (description.includes(keyword.toUpperCase())) {
+                        return category;
+                    }
                 }
+            } catch (error) {
+                console.error("分類交易時出錯:", error);
             }
             
             return '其他'; // 預設類別
@@ -268,18 +332,30 @@
         
         // 獲取類別的顏色
         function getCategoryColor(category) {
-            const colorMap = {
-                '餐飲': 'bg-red-100 text-red-800',
-                '交通': 'bg-blue-100 text-blue-800',
-                '購物': 'bg-yellow-100 text-yellow-800',
-                '娛樂': 'bg-purple-100 text-purple-800',
-                '繳費': 'bg-green-100 text-green-800',
-                '健康': 'bg-indigo-100 text-indigo-800',
-                '費用': 'bg-gray-100 text-gray-800',
-                '其他': 'bg-gray-100 text-gray-800'
-            };
-            
-            return colorMap[category] || 'bg-gray-100 text-gray-800';
+            try {
+                const colorMap = {
+                    '餐飲': 'bg-red-100 text-red-800',
+                    '交通': 'bg-blue-100 text-blue-800',
+                    '購物': 'bg-yellow-100 text-yellow-800',
+                    '娛樂': 'bg-purple-100 text-purple-800',
+                    '繳費': 'bg-green-100 text-green-800',
+                    '健康': 'bg-indigo-100 text-indigo-800',
+                    '生活用品': 'bg-yellow-100 text-yellow-800',
+                    '知識學習': 'bg-indigo-100 text-indigo-800',
+                    '休閒娛樂': 'bg-purple-100 text-purple-800',
+                    '健康醫療': 'bg-green-100 text-green-800',
+                    '訂閱': 'bg-blue-100 text-blue-800',
+                    '固定支出': 'bg-gray-100 text-gray-800',
+                    '美妝': 'bg-pink-100 text-pink-800',
+                    '服飾配件': 'bg-purple-100 text-purple-800',
+                    '其他': 'bg-gray-100 text-gray-800'
+                };
+                
+                return colorMap[category] || 'bg-gray-100 text-gray-800';
+            } catch (error) {
+                console.error("獲取類別顏色時出錯:", error);
+                return 'bg-gray-100 text-gray-800';
+            }
         }
 
         // 用於存儲解析的交易資料
@@ -287,161 +363,291 @@
 
         // 設置頁面的事件處理程序
         document.addEventListener('DOMContentLoaded', function() {
-            const uploadButton = document.getElementById('upload-button');
-            const pdfUpload = document.getElementById('pdf-upload');
-            const backToUpload = document.getElementById('back-to-upload');
-            const proceedToSubmit = document.getElementById('proceed-to-submit');
-            const newUpload = document.getElementById('new-upload');
-            const imageUploadButton = document.getElementById('image-upload-button');
-            const dropZone = document.getElementById('drop-zone');
-            
-            // 上傳按鈕點擊事件
-            uploadButton.addEventListener('click', function() {
-                pdfUpload.click();
-            });
-            
-            // 檔案選擇事件
-            pdfUpload.addEventListener('change', function(e) {
-                if (e.target.files.length > 0) {
-                    const file = e.target.files[0];
-                    if (!file || file.type !== 'application/pdf') {
-                        alert('請上傳有效的 PDF 檔案！');
+            try {
+                const uploadButton = document.getElementById('upload-button');
+                const pdfUpload = document.getElementById('pdf-upload');
+                const backToUpload = document.getElementById('back-to-upload');
+                const proceedToSubmit = document.getElementById('proceed-to-submit');
+                const newUpload = document.getElementById('new-upload');
+                const imageUploadButton = document.getElementById('image-upload-button');
+                const dropZone = document.getElementById('drop-zone');
+                const closeError = document.getElementById('close-error');
+                
+                // 關閉錯誤訊息
+                closeError.addEventListener('click', function() {
+                    document.getElementById('error-alert').classList.add('hidden');
+                });
+                
+                // 上傳按鈕點擊事件
+                uploadButton.addEventListener('click', function() {
+                    pdfUpload.click();
+                });
+                
+                // 檔案選擇事件
+                pdfUpload.addEventListener('change', function(e) {
+                    try {
+                        if (e.target.files.length > 0) {
+                            const file = e.target.files[0];
+                            if (!file || file.type !== 'application/pdf') {
+                                showError('檔案類型錯誤', '請上傳有效的 PDF 檔案！');
+                                return;
+                            }
+                            showLoading(true, '正在解析 PDF 檔案...');
+                            
+                            // 設置處理超時
+                            resetProcessingTimeout(() => {
+                                showLoading(false);
+                                showError('處理 PDF 超時', '處理時間過長，請嘗試上傳較小的檔案或使用圖片上傳方式。');
+                            });
+                            
+                            processPDF(file);
+                        }
+                    } catch (error) {
+                        console.error("處理檔案選擇時出錯:", error);
                         showLoading(false);
-                        return;
-                    }
-                    showLoading(true);
-                    processPDF(file);
-                }
-            });
-            
-            // 圖片上傳按鈕點擊事件
-            imageUploadButton.addEventListener('click', () => {
-                const imageUploadInput = document.createElement('input');
-                imageUploadInput.type = 'file';
-                imageUploadInput.accept = 'image/*';
-                imageUploadInput.addEventListener('change', (e) => {
-                    if (e.target.files.length > 0) {
-                        const file = e.target.files[0];
-                        showLoading(true);
-                        processImage(file);
+                        showError('處理檔案時出錯', error.message);
                     }
                 });
-                imageUploadInput.click();
-            });
-            
-            // 返回按鈕點擊事件
-            backToUpload.addEventListener('click', function() {
-                showSection('upload-section');
-                setActiveStep(1);
-            });
-            
-            // 送出按鈕點擊事件
-            proceedToSubmit.addEventListener('click', function() {
-                // 驗證 Notion API 密鑰和資料庫 ID
-                const notionToken = document.getElementById('notion-token').value.trim();
-                const databaseId = document.getElementById('database-id').value.trim();
                 
-                if (!notionToken) {
-                    alert('請輸入 Notion API 密鑰');
-                    document.getElementById('notion-token').focus();
-                    return;
-                }
-                
-                if (!databaseId) {
-                    alert('請輸入 Notion 資料庫 ID');
-                    document.getElementById('database-id').focus();
-                    return;
-                }
-                
-                // 檢查API密鑰格式
-                if (!notionToken.startsWith('secret_')) {
-                    alert('Notion API 密鑰格式錯誤，應以 secret_ 開頭');
-                    document.getElementById('notion-token').focus();
-                    return;
-                }
-                
-                showLoading(true);
-                submitToNotion();
-            });
-            
-            // 上傳新檔案按鈕點擊事件
-            newUpload.addEventListener('click', function() {
-                // 清除之前的資料，包括 API 密鑰和資料庫 ID
-                pdfUpload.value = '';
-                document.getElementById('notion-token').value = '';
-                document.getElementById('database-id').value = '';
-                transactions = [];
-                
-                showSection('upload-section');
-                setActiveStep(1);
-            });
-            
-            // 拖放支持
-            dropZone.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                dropZone.classList.add('border-blue-500');
-            });
-            
-            dropZone.addEventListener('dragleave', () => {
-                dropZone.classList.remove('border-blue-500');
-            });
-            
-            dropZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                dropZone.classList.remove('border-blue-500');
-                
-                if (e.dataTransfer.files.length > 0) {
-                    const file = e.dataTransfer.files[0];
-                    if (file.type === 'application/pdf') {
-                        showLoading(true);
-                        processPDF(file);
-                    } else if (file.type.startsWith('image/')) {
-                        showLoading(true);
-                        processImage(file);
-                    } else {
-                        alert('請上傳PDF檔案或圖片檔案');
+                // 圖片上傳按鈕點擊事件
+                imageUploadButton.addEventListener('click', () => {
+                    try {
+                        const imageUploadInput = document.createElement('input');
+                        imageUploadInput.type = 'file';
+                        imageUploadInput.accept = 'image/*';
+                        imageUploadInput.addEventListener('change', (e) => {
+                            try {
+                                if (e.target.files.length > 0) {
+                                    const file = e.target.files[0];
+                                    showLoading(true, '正在處理圖片...');
+                                    
+                                    // 設置處理超時
+                                    resetProcessingTimeout(() => {
+                                        showLoading(false);
+                                        showError('處理圖片超時', '處理時間過長，請嘗試上傳較小的圖片或使用PDF上傳方式。');
+                                    });
+                                    
+                                    processImage(file);
+                                }
+                            } catch (error) {
+                                console.error("處理圖片選擇時出錯:", error);
+                                showLoading(false);
+                                showError('處理圖片時出錯', error.message);
+                            }
+                        });
+                        imageUploadInput.click();
+                    } catch (error) {
+                        console.error("創建圖片上傳輸入框時出錯:", error);
+                        showError('創建圖片上傳時出錯', error.message);
                     }
-                }
-            });
+                });
+                
+                // 返回按鈕點擊事件
+                backToUpload.addEventListener('click', function() {
+                    try {
+                        showSection('upload-section');
+                        setActiveStep(1);
+                    } catch (error) {
+                        console.error("返回上傳頁面時出錯:", error);
+                        showError('返回上傳頁面時出錯', error.message);
+                    }
+                });
+                
+                // 送出按鈕點擊事件
+                proceedToSubmit.addEventListener('click', function() {
+                    try {
+                        // 驗證 Notion API 密鑰和資料庫 ID
+                        const notionToken = document.getElementById('notion-token').value.trim();
+                        const databaseId = document.getElementById('database-id').value.trim();
+                        
+                        if (!notionToken) {
+                            showError('請輸入 Notion API 密鑰');
+                            document.getElementById('notion-token').focus();
+                            return;
+                        }
+                        
+                        if (!databaseId) {
+                            showError('請輸入 Notion 資料庫 ID');
+                            document.getElementById('database-id').focus();
+                            return;
+                        }
+                        
+                        // 檢查API密鑰格式
+                        if (!notionToken.startsWith('secret_')) {
+                            showError('Notion API 密鑰格式錯誤', '應以 secret_ 開頭');
+                            document.getElementById('notion-token').focus();
+                            return;
+                        }
+                        
+                        showLoading(true, '正在連接 Notion API...');
+                        
+                        // 設置處理超時
+                        resetProcessingTimeout(() => {
+                            showLoading(false);
+                            showError('連接 Notion API 超時', '請檢查您的網絡連接或稍後再試。');
+                        });
+                        
+                        submitToNotion();
+                    } catch (error) {
+                        console.error("處理提交時出錯:", error);
+                        showLoading(false);
+                        showError('處理提交時出錯', error.message);
+                    }
+                });
+                
+                // 上傳新檔案按鈕點擊事件
+                newUpload.addEventListener('click', function() {
+                    try {
+                        // 清除之前的資料，包括 API 密鑰和資料庫 ID
+                        pdfUpload.value = '';
+                        document.getElementById('notion-token').value = '';
+                        document.getElementById('database-id').value = '';
+                        transactions = [];
+                        
+                        showSection('upload-section');
+                        setActiveStep(1);
+                    } catch (error) {
+                        console.error("返回上傳新檔案時出錯:", error);
+                        showError('返回上傳頁面時出錯', error.message);
+                    }
+                });
+                
+                // 拖放支持
+                dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('border-blue-500');
+                });
+                
+                dropZone.addEventListener('dragleave', () => {
+                    dropZone.classList.remove('border-blue-500');
+                });
+                
+                dropZone.addEventListener('drop', (e) => {
+                    try {
+                        e.preventDefault();
+                        dropZone.classList.remove('border-blue-500');
+                        
+                        if (e.dataTransfer.files.length > 0) {
+                            const file = e.dataTransfer.files[0];
+                            if (file.type === 'application/pdf') {
+                                showLoading(true, '正在解析 PDF 檔案...');
+                                
+                                // 設置處理超時
+                                resetProcessingTimeout(() => {
+                                    showLoading(false);
+                                    showError('處理 PDF 超時', '處理時間過長，請嘗試上傳較小的檔案或使用圖片上傳方式。');
+                                });
+                                
+                                processPDF(file);
+                            } else if (file.type.startsWith('image/')) {
+                                showLoading(true, '正在處理圖片...');
+                                
+                                // 設置處理超時
+                                resetProcessingTimeout(() => {
+                                    showLoading(false);
+                                    showError('處理圖片超時', '處理時間過長，請嘗試上傳較小的圖片或使用PDF上傳方式。');
+                                });
+                                
+                                processImage(file);
+                            } else {
+                                showError('檔案類型錯誤', '請上傳PDF檔案或圖片檔案');
+                            }
+                        }
+                    } catch (error) {
+                        console.error("處理拖放時出錯:", error);
+                        showLoading(false);
+                        showError('處理拖放時出錯', error.message);
+                    }
+                });
+            } catch (error) {
+                console.error("設置事件處理程序時出錯:", error);
+                showError('初始化頁面時出錯', error.message);
+            }
         });
+
+        // 設置處理超時
+        function resetProcessingTimeout(callback) {
+            try {
+                // 清除之前的超時
+                if (processingTimeoutId !== null) {
+                    clearTimeout(processingTimeoutId);
+                }
+                
+                // 設置新的超時
+                processingTimeoutId = setTimeout(() => {
+                    processingTimeoutId = null;
+                    if (callback) callback();
+                }, PROCESSING_TIMEOUT);
+            } catch (error) {
+                console.error("設置處理超時時出錯:", error);
+            }
+        }
+        
+        // 清除處理超時
+        function clearProcessingTimeout() {
+            try {
+                if (processingTimeoutId !== null) {
+                    clearTimeout(processingTimeoutId);
+                    processingTimeoutId = null;
+                }
+            } catch (error) {
+                console.error("清除處理超時時出錯:", error);
+            }
+        }
 
         // 設置活動步驟
         function setActiveStep(stepNumber) {
-            document.querySelectorAll('.step').forEach((step, index) => {
-                if (index + 1 === stepNumber) {
-                    step.classList.remove('text-gray-400', 'border-gray-200');
-                    step.classList.add('text-blue-600', 'border-blue-600');
-                } else if (index + 1 < stepNumber) {
-                    step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-400', 'border-gray-200');
-                    step.classList.add('text-gray-600', 'border-gray-400');
-                } else {
-                    step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-600', 'border-gray-400');
-                    step.classList.add('text-gray-400', 'border-gray-200');
-                }
-            });
+            try {
+                document.querySelectorAll('.step').forEach((step, index) => {
+                    if (index + 1 === stepNumber) {
+                        step.classList.remove('text-gray-400', 'border-gray-200');
+                        step.classList.add('text-blue-600', 'border-blue-600');
+                    } else if (index + 1 < stepNumber) {
+                        step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-400', 'border-gray-200');
+                        step.classList.add('text-gray-600', 'border-gray-400');
+                    } else {
+                        step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-600', 'border-gray-400');
+                        step.classList.add('text-gray-400', 'border-gray-200');
+                    }
+                });
+            } catch (error) {
+                console.error("設置活動步驟時出錯:", error);
+            }
         }
 
         // 顯示/隱藏載入指示器
-        function showLoading(show) {
-            const loading = document.getElementById('loading');
-            if (show) {
-                loading.style.display = 'flex';
-            } else {
-                loading.style.display = 'none';
+        function showLoading(show, text = '處理中，請稍候...') {
+            try {
+                const loading = document.getElementById('loading');
+                const loadingText = document.querySelector('.loading-text');
+                
+                if (show) {
+                    loadingText.textContent = text;
+                    loading.style.display = 'flex';
+                } else {
+                    loading.style.display = 'none';
+                    clearProcessingTimeout();
+                }
+            } catch (error) {
+                console.error("顯示/隱藏載入指示器時出錯:", error);
             }
         }
 
         // 顯示指定區域，隱藏其他區域
         function showSection(sectionId) {
-            const sections = ['upload-section', 'preview-section', 'result-section'];
-            sections.forEach(id => {
-                const section = document.getElementById(id);
-                if (id === sectionId) {
-                    section.classList.remove('hidden');
-                } else {
-                    section.classList.add('hidden');
-                }
-            });
+            try {
+                const sections = ['upload-section', 'preview-section', 'result-section'];
+                sections.forEach(id => {
+                    const section = document.getElementById(id);
+                    if (id === sectionId) {
+                        section.classList.remove('hidden');
+                    } else {
+                        section.classList.add('hidden');
+                    }
+                });
+            } catch (error) {
+                console.error("顯示區域時出錯:", error);
+            }
         }
 
         // 處理PDF檔案
@@ -466,7 +672,7 @@
                 
                 // 如果沒有提取到交易，顯示提示
                 if (transactions.length === 0) {
-                    alert('未能從PDF中提取到任何交易資料。請確保PDF格式正確。');
+                    showError('未能提取交易數據', '未能從PDF中提取到任何交易資料。請確保PDF格式正確。');
                     showLoading(false);
                     return;
                 }
@@ -482,195 +688,293 @@
                 
             } catch (error) {
                 console.error('處理 PDF 時出錯:', error);
-                alert('處理 PDF 時出錯: ' + error.message);
+                showError('處理 PDF 時出錯', error.message);
             } finally {
+                clearProcessingTimeout();
                 showLoading(false); // 確保無論成功或失敗都隱藏 loading
             }
         }
 
         // 新增圖片上傳與解析功能
         function processImage(file) {
-            Tesseract.recognize(
-                file, // 圖片文件
-                'eng', // 語言設置
-                {
-                    logger: info => console.log(info) // 可選：用於調試的日誌
-                }
-            ).then(({ data: { text } }) => {
-                console.log('OCR 提取的文字:', text);
-                extractTransactions(text); // 使用現有的交易提取邏輯
-                
-                // 如果沒有提取到交易，顯示提示
-                if (transactions.length === 0) {
-                    alert('未能從圖片中提取到任何交易資料。請確保圖片清晰且包含交易資訊。');
+            try {
+                Tesseract.recognize(
+                    file, // 圖片文件
+                    'eng+chi_tra', // 語言設置，同時支持英文和繁體中文
+                    {
+                        logger: info => {
+                            console.log(info);
+                            if (info.status === 'recognizing text') {
+                                showLoading(true, `OCR識別中: ${Math.round(info.progress * 100)}%`);
+                            }
+                        }
+                    }
+                ).then(({ data: { text } }) => {
+                    console.log('OCR 提取的文字:', text);
+                    extractTransactions(text); // 使用現有的交易提取邏輯
+                    
+                    // 如果沒有提取到交易，顯示提示
+                    if (transactions.length === 0) {
+                        showError('未能提取交易數據', '未能從圖片中提取到任何交易資料。請確保圖片清晰且包含交易資訊。');
+                        showLoading(false);
+                        return;
+                    }
+                    
+                    // 清空先前可能存在的敏感資料
+                    document.getElementById('notion-token').value = '';
+                    document.getElementById('database-id').value = '';
+                    
+                    populateTransactionsPreview(); // 填充預覽表格
+                    showSection('preview-section');
+                    setActiveStep(2);
+                }).catch(error => {
+                    console.error('處理圖片時出錯:', error);
+                    showError('處理圖片時出錯', error.message);
+                }).finally(() => {
+                    clearProcessingTimeout();
                     showLoading(false);
-                    return;
-                }
-                
-                // 清空先前可能存在的敏感資料
-                document.getElementById('notion-token').value = '';
-                document.getElementById('database-id').value = '';
-                
-                populateTransactionsPreview(); // 填充預覽表格
-                showSection('preview-section');
-                setActiveStep(2);
-            }).catch(error => {
+                });
+            } catch (error) {
                 console.error('處理圖片時出錯:', error);
-                alert('處理圖片時出錯: ' + error.message);
-            }).finally(() => {
+                showError('處理圖片時出錯', error.message);
                 showLoading(false);
-            });
+            }
         }
 
         // 更新交易解析邏輯以提取所需的欄位
         function extractTransactions(text) {
-            console.log('提取的文字:', text); // 加入日誌
-            
-            // 清空之前的交易記錄
-            transactions = [];
-            
-            // 正則表達式匹配交易記錄
-            // 格式：日期 日期 描述 金額
-            const transactionRegex = /(\d{1,2} [A-Z]{3} \d{4})\s+(\d{1,2} [A-Z]{3} \d{4})\s+([^\n]+?)\s+([\d,.]+(?:-)?)\s*$/gm;
-            
-            let match;
-            while ((match = transactionRegex.exec(text)) !== null) {
-                console.log('匹配到的交易:', match); // 加入日誌
+            try {
+                console.log('提取的文字:', text); // 加入日誌
                 
-                // 提取日期、描述和金額
-                const transactionDate = match[1]; // 第一個日期
-                const postingDate = match[2];     // 第二個日期
-                const description = match[3].trim();
-                const amountStr = match[4].replace(',', '');
-                const amount = parseFloat(amountStr);
+                // 清空之前的交易記錄
+                transactions = [];
                 
-                // 根據商家名稱分類交易
-                const category = categorizeTransaction(description);
+                // 優化正則表達式，增加對不同格式的支持
+                // 1. 標準格式：日期 日期 描述 金額
+                const standardRegex = /(\d{1,2} [A-Z]{3} \d{4})\s+(\d{1,2} [A-Z]{3} \d{4})\s+([^\n]+?)\s+([\d,.]+(?:-)?)\s*$/gm;
                 
-                // 將交易添加到陣列
-                transactions.push({
-                    name: description,
-                    amount: amount,
-                    transactionDate: transactionDate,
-                    category: category,
-                    note: '',
-                    paymentMethod: '信用卡'
-                });
+                // 2. 替代格式：日期（可能有時間） 描述 金額（可能有貨幣符號）
+                const altRegex = /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})(?:\s+\d{1,2}:\d{2})?\s+([^\n\$]+?)\s+\$?\s*([\d,.]+)/gm;
+                
+                // 處理標準格式
+                let match;
+                while ((match = standardRegex.exec(text)) !== null) {
+                    console.log('匹配到的標準格式交易:', match); // 加入日誌
+                    
+                    // 提取日期、描述和金額
+                    const transactionDate = match[1]; // 第一個日期
+                    const postingDate = match[2];     // 第二個日期
+                    const description = match[3].trim();
+                    const amountStr = match[4].replace(/,/g, '');
+                    const amount = parseFloat(amountStr);
+                    
+                    if (!isNaN(amount) && description) {
+                        // 根據商家名稱分類交易
+                        const category = categorizeTransaction(description);
+                        
+                        // 將交易添加到陣列
+                        transactions.push({
+                            name: description,
+                            amount: amount,
+                            transactionDate: transactionDate,
+                            category: category,
+                            note: '',
+                            paymentMethod: '信用卡'
+                        });
+                    }
+                }
+                
+                // 如果標準格式沒有匹配到交易，嘗試替代格式
+                if (transactions.length === 0) {
+                    while ((match = altRegex.exec(text)) !== null) {
+                        console.log('匹配到的替代格式交易:', match); // 加入日誌
+                        
+                        // 提取日期、描述和金額
+                        const transactionDate = match[1]; // 日期
+                        const description = match[2].trim();
+                        const amountStr = match[3].replace(/,/g, '');
+                        const amount = parseFloat(amountStr);
+                        
+                        if (!isNaN(amount) && description) {
+                            // 根據商家名稱分類交易
+                            const category = categorizeTransaction(description);
+                            
+                            // 將交易添加到陣列
+                            transactions.push({
+                                name: description,
+                                amount: amount,
+                                transactionDate: transactionDate,
+                                category: category,
+                                note: '',
+                                paymentMethod: '信用卡'
+                            });
+                        }
+                    }
+                }
+                
+                // 如果還是沒有找到交易，嘗試更寬鬆的匹配
+                if (transactions.length === 0) {
+                    // 尋找任何可能的交易行
+                    const looseRegex = /(.{10,50})\s+(\d+\.\d{2})/g;
+                    while ((match = looseRegex.exec(text)) !== null) {
+                        console.log('寬鬆匹配到的可能交易:', match);
+                        const description = match[1].trim();
+                        const amountStr = match[2].replace(/,/g, '');
+                        const amount = parseFloat(amountStr);
+                        
+                        if (!isNaN(amount) && description && !description.match(/^\d+$/)) {
+                            const category = categorizeTransaction(description);
+                            const today = new Date();
+                            const transactionDate = `${today.getDate()} ${['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][today.getMonth()]} ${today.getFullYear()}`;
+                            
+                            transactions.push({
+                                name: description,
+                                amount: amount,
+                                transactionDate: transactionDate,
+                                category: category,
+                                note: '自動識別，請確認',
+                                paymentMethod: '信用卡'
+                            });
+                        }
+                    }
+                }
+                
+                console.log('提取的交易資料:', transactions);
+            } catch (error) {
+                console.error("提取交易資料時出錯:", error);
+                showError('提取交易資料時出錯', error.message);
             }
-            
-            console.log('提取的交易資料:', transactions);
         }
 
         // 更新預覽表格以顯示新欄位
         function populateTransactionsPreview() {
-            const tbody = document.getElementById('transactions-preview');
-            tbody.innerHTML = '';
+            try {
+                const tbody = document.getElementById('transactions-preview');
+                tbody.innerHTML = '';
 
-            transactions.forEach((transaction, index) => {
-                const row = document.createElement('tr');
-                row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                transactions.forEach((transaction, index) => {
+                    const row = document.createElement('tr');
+                    row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
 
-                // 名稱
-                const nameCell = document.createElement('td');
-                nameCell.className = 'px-3 py-2 text-sm';
-                nameCell.textContent = transaction.name;
-                row.appendChild(nameCell);
+                    // 名稱
+                    const nameCell = document.createElement('td');
+                    nameCell.className = 'px-3 py-2 text-sm';
+                    nameCell.textContent = transaction.name;
+                    row.appendChild(nameCell);
 
-                // 金額
-                const amountCell = document.createElement('td');
-                amountCell.className = 'px-3 py-2 text-sm';
-                amountCell.textContent = transaction.amount.toFixed(2);
-                row.appendChild(amountCell);
+                    // 金額
+                    const amountCell = document.createElement('td');
+                    amountCell.className = 'px-3 py-2 text-sm';
+                    amountCell.textContent = transaction.amount.toFixed(2);
+                    row.appendChild(amountCell);
 
-                // 交易日期
-                const dateCell = document.createElement('td');
-                dateCell.className = 'px-3 py-2 text-sm';
-                dateCell.textContent = transaction.transactionDate;
-                row.appendChild(dateCell);
+                    // 交易日期
+                    const dateCell = document.createElement('td');
+                    dateCell.className = 'px-3 py-2 text-sm';
+                    dateCell.textContent = transaction.transactionDate;
+                    row.appendChild(dateCell);
 
-                // 類別
-                const categoryCell = document.createElement('td');
-                categoryCell.className = 'px-3 py-2 text-sm';
-                
-                const categorySpan = document.createElement('span');
-                categorySpan.className = 'category-badge ' + getCategoryColor(transaction.category);
-                categorySpan.textContent = transaction.category;
-                
-                categoryCell.appendChild(categorySpan);
-                row.appendChild(categoryCell);
+                    // 類別
+                    const categoryCell = document.createElement('td');
+                    categoryCell.className = 'px-3 py-2 text-sm';
+                    
+                    const categorySpan = document.createElement('span');
+                    categorySpan.className = 'category-badge ' + getCategoryColor(transaction.category);
+                    categorySpan.textContent = transaction.category;
+                    
+                    categoryCell.appendChild(categorySpan);
+                    row.appendChild(categoryCell);
 
-                // 備註
-                const noteCell = document.createElement('td');
-                noteCell.className = 'px-3 py-2 text-sm';
-                
-                const noteInput = document.createElement('input');
-                noteInput.type = 'text';
-                noteInput.className = 'border rounded px-2 py-1 w-full';
-                noteInput.value = transaction.note;
-                noteInput.addEventListener('input', (e) => {
-                    transactions[index].note = e.target.value;
+                    // 備註
+                    const noteCell = document.createElement('td');
+                    noteCell.className = 'px-3 py-2 text-sm';
+                    
+                    const noteInput = document.createElement('input');
+                    noteInput.type = 'text';
+                    noteInput.className = 'border rounded px-2 py-1 w-full';
+                    noteInput.value = transaction.note;
+                    noteInput.addEventListener('input', (e) => {
+                        transactions[index].note = e.target.value;
+                    });
+                    
+                    noteCell.appendChild(noteInput);
+                    row.appendChild(noteCell);
+
+                    // 付款方式
+                    const paymentMethodCell = document.createElement('td');
+                    paymentMethodCell.className = 'px-3 py-2 text-sm';
+                    
+                    const paymentMethodSelect = document.createElement('select');
+                    paymentMethodSelect.className = 'border rounded px-2 py-1 w-full';
+                    
+                    ['信用卡', '現金', '轉帳'].forEach((method) => {
+                        const option = document.createElement('option');
+                        option.value = method;
+                        option.textContent = method;
+                        if (method === transaction.paymentMethod) {
+                            option.selected = true;
+                        }
+                        paymentMethodSelect.appendChild(option);
+                    });
+                    
+                    paymentMethodSelect.addEventListener('change', (e) => {
+                        transactions[index].paymentMethod = e.target.value;
+                    });
+                    
+                    paymentMethodCell.appendChild(paymentMethodSelect);
+                    row.appendChild(paymentMethodCell);
+
+                    tbody.appendChild(row);
                 });
-                
-                noteCell.appendChild(noteInput);
-                row.appendChild(noteCell);
-
-                // 付款方式
-                const paymentMethodCell = document.createElement('td');
-                paymentMethodCell.className = 'px-3 py-2 text-sm';
-                
-                const paymentMethodSelect = document.createElement('select');
-                paymentMethodSelect.className = 'border rounded px-2 py-1 w-full';
-                
-                ['信用卡', '現金', '轉帳'].forEach((method) => {
-                    const option = document.createElement('option');
-                    option.value = method;
-                    option.textContent = method;
-                    if (method === transaction.paymentMethod) {
-                        option.selected = true;
-                    }
-                    paymentMethodSelect.appendChild(option);
-                });
-                
-                paymentMethodSelect.addEventListener('change', (e) => {
-                    transactions[index].paymentMethod = e.target.value;
-                });
-                
-                paymentMethodCell.appendChild(paymentMethodSelect);
-                row.appendChild(paymentMethodCell);
-
-                tbody.appendChild(row);
-            });
+            } catch (error) {
+                console.error("填充交易預覽時出錯:", error);
+                showError('顯示交易預覽時出錯', error.message);
+            }
         }
 
         // 直接調用Notion API的函數
         async function callNotionAPI(endpoint, method, token, body = null) {
-            const proxy = await getWorkingProxy();
-            const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
-            
-            const headers = {
-                'Authorization': `Bearer ${token}`,
-                'Notion-Version': NOTION_VERSION,
-                'Content-Type': 'application/json'
-            };
-            
-            const options = {
-                method: method,
-                headers: headers
-            };
-            
-            if (body) {
-                options.body = JSON.stringify(body);
-            }
-            
             try {
-                const response = await fetch(url, options);
+                const proxy = await getWorkingProxy();
+                const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
                 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.message || `API請求失敗：${response.status}`);
+                console.log(`API請求: ${method} ${url}`);
+                
+                const headers = {
+                    'Authorization': `Bearer ${token}`,
+                    'Notion-Version': NOTION_VERSION,
+                    'Content-Type': 'application/json'
+                };
+                
+                const options = {
+                    method: method,
+                    headers: headers
+                };
+                
+                if (body) {
+                    options.body = JSON.stringify(body);
                 }
                 
-                return await response.json();
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超時
+                options.signal = controller.signal;
+                
+                try {
+                    const response = await fetch(url, options);
+                    clearTimeout(timeoutId);
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.message || `API請求失敗：${response.status}`);
+                    }
+                    
+                    return await response.json();
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        throw new Error('請求超時，請檢查您的網絡連接或稍後再試');
+                    }
+                    throw error;
+                }
             } catch (error) {
                 console.error('API調用錯誤:', error);
                 throw error;
@@ -695,19 +999,24 @@
 
         // 創建Notion頁面
         async function createNotionPage(token, databaseId, transaction) {
-            const pageData = {
-                parent: { database_id: databaseId },
-                properties: {
-                    名稱: { title: [{ text: { content: transaction.name } }] },
-                    金額: { number: transaction.amount },
-                    交易日期: { date: { start: transaction.transactionDate } },
-                    類別: { select: { name: transaction.category } },
-                    備註: { rich_text: [{ text: { content: transaction.note || '' } }] },
-                    付款方式: { select: { name: transaction.paymentMethod } },
-                }
-            };
-            
-            return await callNotionAPI('pages', 'POST', token, pageData);
+            try {
+                const pageData = {
+                    parent: { database_id: databaseId },
+                    properties: {
+                        名稱: { title: [{ text: { content: transaction.name } }] },
+                        金額: { number: transaction.amount },
+                        交易日期: { date: { start: transaction.transactionDate } },
+                        類別: { select: { name: transaction.category } },
+                        備註: { rich_text: [{ text: { content: transaction.note || '' } }] },
+                        付款方式: { select: { name: transaction.paymentMethod } },
+                    }
+                };
+                
+                return await callNotionAPI('pages', 'POST', token, pageData);
+            } catch (error) {
+                console.error('創建Notion頁面時出錯:', error);
+                throw error;
+            }
         }
 
         // 送出資料至 Notion
@@ -718,7 +1027,7 @@
                 
                 // 再次驗證輸入
                 if (!notionToken || !databaseId) {
-                    alert('請輸入Notion API密鑰和資料庫ID');
+                    showError('缺少必要資訊', '請輸入Notion API密鑰和資料庫ID');
                     showLoading(false);
                     return;
                 }
@@ -739,6 +1048,7 @@
                 setActiveStep(3);
                 
                 // 首先檢查資料庫訪問權限
+                showLoading(true, '驗證Notion API資訊...');
                 const dbCheckResult = await checkDatabaseAccess(notionToken, databaseId);
                 if (!dbCheckResult.success) {
                     throw new Error(dbCheckResult.message);
@@ -752,6 +1062,8 @@
                 // 逐個處理交易
                 for (let i = 0; i < transactions.length; i++) {
                     try {
+                        showLoading(true, `處理交易 ${i+1}/${transactions.length}...`);
+                        
                         await createNotionPage(notionToken, databaseId, transactions[i]);
                         successCount++;
                     } catch (error) {
@@ -811,6 +1123,7 @@
                     </div>
                 `;
             } finally {
+                clearProcessingTimeout();
                 showLoading(false); // 確保無論成功或失敗都隱藏 loading
             }
         }
