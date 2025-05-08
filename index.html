@@ -239,64 +239,37 @@
         
         // 改進代理選擇邏輯
         async function getWorkingProxy() {
-            // 更新默認CORS代理列表
-            const DEFAULT_PROXIES = [
-                "https://corsproxy.io/?",
-                "https://api.allorigins.win/raw?url=",
-                "https://cors-anywhere.herokuapp.com/",
-                "https://cors.bridged.cc/"
-            ];
-            
+    const customProxy = document.getElementById('cors-proxy')?.value?.trim();
+    if (customProxy) {
+        return customProxy.endsWith('?apiurl=') ? customProxy : customProxy + '?apiurl=';
+    }
+        
             try {
-                // 檢查用戶是否提供了自定義代理
                 const customProxy = document.getElementById('cors-proxy')?.value?.trim();
                 if (customProxy) {
                     console.log("使用自定義代理:", customProxy);
-                    // 確保代理URL以/結尾
                     return customProxy.endsWith('/') ? customProxy : customProxy + '/';
                 }
-                
+        
                 console.log("正在測試默認CORS代理...");
-                let workingProxies = [];
-                
-                // 測試所有代理並收集可用的
                 for (const proxy of DEFAULT_PROXIES) {
                     try {
                         const testUrl = `${proxy}https://httpbin.org/get`;
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 3000); // 縮短測試超時
-                        
-                        console.log(`測試代理: ${proxy}`);
-                        const response = await fetch(testUrl, {
-                            method: 'GET',
-                            signal: controller.signal
-                        });
-                        
-                        clearTimeout(timeoutId);
-                        
+                        const response = await fetch(testUrl, { method: 'GET' });
                         if (response.ok) {
                             console.log(`代理可用: ${proxy}`);
-                            workingProxies.push(proxy);
+                            return proxy;
                         }
                     } catch (e) {
-                        console.log(`代理不可用: ${proxy} (${e.message})`);
+                        console.warn(`代理不可用: ${proxy} (${e.message})`);
                     }
                 }
-                
-                if (workingProxies.length > 0) {
-                    const selectedProxy = workingProxies[0]; // 使用第一個可用的代理
-                    console.log(`選擇代理: ${selectedProxy}`);
-                    return selectedProxy;
-                }
-                
-                // 如果沒有可用代理，給出明確錯誤
+        
                 console.warn("所有CORS代理均不可用，回退到第一個代理");
-                showError("CORS代理不可用", "所有默認CORS代理均不可用。請嘗試使用自己的CORS代理，或安裝瀏覽器擴展如「CORS Unblock」來臨時禁用CORS檢查。");
-                return DEFAULT_PROXIES[0]; // 回退到第一個代理，但可能不工作
+                return DEFAULT_PROXIES[0];
             } catch (error) {
                 console.error("選擇代理出錯:", error);
-                showError("代理選擇錯誤", "無法選擇有效的CORS代理: " + error.message);
-                return DEFAULT_PROXIES[0]; // 回退到第一個代理
+                return DEFAULT_PROXIES[0];
             }
         }
 
@@ -713,30 +686,20 @@
                     try {
                         const notionToken = document.getElementById('notion-token').value.trim();
                         const databaseId = document.getElementById('database-id').value.trim();
-                        
+                
                         if (!notionToken) {
                             showError('請輸入 Notion API 密鑰');
-                            document.getElementById('notion-token').focus();
                             return;
                         }
-                        
+                
                         if (!databaseId) {
                             showError('請輸入 Notion 資料庫 ID');
-                            document.getElementById('database-id').focus();
                             return;
                         }
-                        
-                        // 檢查API密鑰格式
-                        if (!notionToken) {
-                            showError('請輸入 Notion API 密鑰');
-                            document.getElementById('notion-token').focus();
-                            return;
-                        }
-                        
+                
                         showLoading(true, '測試連接中...');
-                        
                         const result = await diagnoseNotionConnection(notionToken, databaseId);
-                        
+                
                         if (result.success) {
                             showSuccess('連接成功', result.message);
                         } else {
@@ -1243,6 +1206,57 @@ function showLoading(show, text = '處理中，請稍候...') {
             }
         }
 
+        // 格式化日期以符合Notion的要求
+                // 在 createNotionPage 函數中修改日期格式
+                function formatDateForNotion(dateStr) {
+            try {
+                // 處理格式如 "15 MAR 2023"
+                if (dateStr.match(/\d{1,2} [A-Z]{3} \d{4}/)) {
+                    const parts = dateStr.split(' ');
+                    const day = parseInt(parts[0]);
+                    const monthMap = {
+                        'JAN': 0, 'FEB': 1, 'MAR': 2, 'APR': 3, 'MAY': 4, 'JUN': 5,
+                        'JUL': 6, 'AUG': 7, 'SEP': 8, 'OCT': 9, 'NOV': 10, 'DEC': 11
+                    };
+                    const month = monthMap[parts[1]];
+                    const year = parseInt(parts[2]);
+                    
+                    if (!isNaN(day) && month !== undefined && !isNaN(year)) {
+                        const date = new Date(year, month, day);
+                        return date.toISOString().split('T')[0]; // 返回 YYYY-MM-DD 格式
+                    }
+                }
+                
+                // 處理格式如 "15/03/2023" 或 "15-03-2023"
+                if (dateStr.match(/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/)) {
+                    const cleanDate = dateStr.replace(/[\/\-\.]/g, '/');
+                    const parts = cleanDate.split('/');
+                    
+                    // 假設格式為 DD/MM/YYYY
+                    const day = parseInt(parts[0]);
+                    const month = parseInt(parts[1]) - 1; // 月份從0開始
+                    let year = parseInt(parts[2]);
+                    
+                    // 處理兩位數年份
+                    if (year < 100) {
+                        year += year < 50 ? 2000 : 1900;
+                    }
+                    
+                    if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+                        const date = new Date(year, month, day);
+                        return date.toISOString().split('T')[0]; // 返回 YYYY-MM-DD 格式
+                    }
+                }
+                
+                // 如果無法解析，返回今天的日期
+                console.warn('無法解析日期:', dateStr, '使用今天的日期');
+                return new Date().toISOString().split('T')[0];
+            } catch (error) {
+                console.error('格式化日期時出錯:', error);
+                return new Date().toISOString().split('T')[0]; // 返回今天的日期作為後備
+            }
+        }
+
         // 更新預覽表格以顯示新欄位
         function populateTransactionsPreview() {
             try {
@@ -1377,16 +1391,18 @@ function showLoading(show, text = '處理中，請稍候...') {
                 throw error;
             }
         }
-
-        // 創建Notion頁面
+        
+        // 修改 createNotionPage 函數中的日期部分
         async function createNotionPage(token, databaseId, transaction) {
             try {
+                const formattedDate = formatDateForNotion(transaction.date);
+                
                 const pageData = {
                     parent: { database_id: databaseId },
                     properties: {
                         名稱: { title: [{ text: { content: transaction.name } }] },
                         金額: { number: transaction.amount },
-                        日期: { date: { start: transaction.date } },
+                        日期: { date: { start: formattedDate } }, // 使用格式化的日期
                         類別: { select: { name: transaction.category } },
                         備註: { rich_text: [{ text: { content: transaction.note || '' } }] },
                         付款方式: { select: { name: transaction.paymentMethod } },
@@ -1400,12 +1416,44 @@ function showLoading(show, text = '處理中，請稍候...') {
             }
         }
 
+        // 添加此函數到您的代碼中
+        async function diagnoseApiError(error, token, dbId) {
+            console.log("正在診斷API錯誤...");
+            let diagnosisResult = "未知錯誤";
+            
+            // 檢查常見錯誤
+            if (error.message.includes("unauthorized") || error.message.includes("401") || error.message.includes("無效")) {
+                diagnosisResult = "API密鑰無效或過期。請確認密鑰格式正確且有效。";
+                
+                // 嘗試用更簡單的請求測試API密鑰
+                try {
+                    await fetch("https://api.notion.com/v1/users/me", {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Notion-Version': NOTION_VERSION
+                        }
+                    });
+                } catch (e) {
+                    diagnosisResult += "\n無法連接到Notion API。請檢查網絡連接。";
+                }
+            } else if (error.message.includes("not found") || error.message.includes("404")) {
+                diagnosisResult = "找不到指定的資料庫。請確認資料庫ID正確。";
+            } else if (error.message.includes("permission") || error.message.includes("403")) {
+                diagnosisResult = "權限不足。請確保您的Notion Integration已被授予訪問此資料庫的權限。";
+            } else if (error.message.includes("structure") || error.message.includes("欄位")) {
+                diagnosisResult = "資料庫結構不符合要求。請確保資料庫包含所需的欄位和正確的欄位類型。";
+            }
+            
+            console.log("診斷結果:", diagnosisResult);
+            return diagnosisResult;
+        }
+
         // 送出資料至 Notion
         // 送出資料至 Notion - 改進錯誤處理與進度顯示
         async function submitToNotion() {
-            try {
-                const notionToken = document.getElementById('notion-token').value.trim();
-                const databaseId = document.getElementById('database-id').value.trim();
+    try {
+        const notionToken = document.getElementById('notion-token').value.trim();
+        const databaseId = document.getElementById('database-id').value.trim();
                 
                 // 再次驗證輸入
                 if (!notionToken || !databaseId) {
@@ -1446,24 +1494,29 @@ function showLoading(show, text = '處理中，請稍候...') {
                 let failCount = 0;
                 let errors = [];
                 
-                // 逐個處理交易
-                for (let i = 0; i < transactions.length; i++) {
-                    const transaction = transactions[i];
-                    const progressPercent = Math.round(((i) / transactions.length) * 100);
-                    document.getElementById('progress-bar').style.width = `${progressPercent}%`;
-                    document.getElementById('current-operation').textContent = 
-                        `處理交易: ${transaction.name.substring(0, 30)}${transaction.name.length > 30 ? '...' : ''}`;
-                    
-                    try {
-                        showLoading(true, `處理交易 ${i+1}/${transactions.length}...`);
-                        
-                        await createNotionPage(notionToken, databaseId, transaction);
-                        successCount++;
-                        
-                        // 更新進度文本
-                        document.getElementById('progress-text').textContent = 
-                            `${i+1}/${transactions.length} 筆交易已處理 (成功: ${successCount}, 失敗: ${failCount})`;
-                    } catch (error) {
+// 逐個處理交易 - 添加間隔防止API限流
+for (let i = 0; i < transactions.length; i++) {
+    const transaction = transactions[i];
+    const progressPercent = Math.round(((i) / transactions.length) * 100);
+    document.getElementById('progress-bar').style.width = `${progressPercent}%`;
+    document.getElementById('current-operation').textContent = 
+        `處理交易: ${transaction.name.substring(0, 30)}${transaction.name.length > 30 ? '...' : ''}`;
+    
+    try {
+        showLoading(true, `處理交易 ${i+1}/${transactions.length}...`);
+        
+        await createNotionPage(notionToken, databaseId, transaction);
+        successCount++;
+        
+        // 更新進度文本
+        document.getElementById('progress-text').textContent = 
+            `${i+1}/${transactions.length} 筆交易已處理 (成功: ${successCount}, 失敗: ${failCount})`;
+            
+        // 添加短暫延遲，防止API限流
+        if (i < transactions.length - 1) {
+            await new Promise(r => setTimeout(r, 500)); // 每次請求間隔500毫秒
+        }
+    } catch (error) {
                         failCount++;
                         errors.push({
                             transaction: transaction.name,
@@ -1520,6 +1573,9 @@ function showLoading(show, text = '處理中，請稍候...') {
             } catch (error) {
                 console.error('送出資料至 Notion 時出錯:', error);
                 
+                // 調用診斷函數
+                const diagnosis = await diagnoseApiError(error, notionToken, databaseId);
+                
                 const resultContent = document.getElementById('result-content');
                 resultContent.innerHTML = `
                     <div class="p-4 bg-red-100 text-red-800 rounded-lg">
@@ -1531,6 +1587,10 @@ function showLoading(show, text = '處理中，請稍候...') {
                         </div>
                         <div class="mt-2 p-3 bg-white rounded-lg shadow-inner">
                             <p class="whitespace-pre-line">${error.message}</p>
+                        </div>
+                        <div class="mt-3 p-2 bg-yellow-50 text-yellow-800 rounded">
+                            <p class="font-bold">問題診斷:</p>
+                            <p class="whitespace-pre-line">${diagnosis}</p>
                         </div>
                     </div>
                     <div class="mt-4 p-3 bg-yellow-50 text-yellow-800 rounded-lg">
