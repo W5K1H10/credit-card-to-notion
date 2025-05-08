@@ -111,7 +111,7 @@
                 <p class="text-sm text-yellow-700 mb-2">為保障安全性，每次上傳都需要輸入您的 Notion API 密鑰和資料庫 ID。您的密鑰不會被儲存或傳送到任何第三方服務。</p>
                 <div class="mt-2">
                     <label class="block text-sm font-medium text-gray-700 input-required">Notion API 密鑰</label>
-                    <input type="password" id="notion-token" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50" placeholder="secret_xxxxxxxxxxx" required>
+                    <input type="text" id="notion-token" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50" placeholder="xxxxxxxxxxxxxxxxxxxxxxxx" required>
                     <p class="text-xs text-gray-500 mt-1">這個密鑰不會被儲存，僅用於本次上傳</p>
                 </div>
                 <div class="mt-2">
@@ -727,8 +727,8 @@
                         }
                         
                         // 檢查API密鑰格式
-                        if (!notionToken.startsWith('secret_')) {
-                            showError('Notion API 密鑰格式錯誤', '應以 secret_ 開頭');
+                        if (!notionToken) {
+                            showError('請輸入 Notion API 密鑰');
                             document.getElementById('notion-token').focus();
                             return;
                         }
