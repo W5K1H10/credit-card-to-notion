@@ -206,7 +206,7 @@
                     <p id="success-details" class="text-sm"></p>
                 </div>
                 <button id="close-success" class="ml-auto">
-                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                 </button>
@@ -237,17 +237,14 @@
         const PROCESSING_TIMEOUT = 60000; // 60秒
         let processingTimeoutId = null;
         
-        // 選擇可用的CORS代理
+        // 改進 CORS 代理選擇邏輯
         async function getWorkingProxy() {
             try {
-                // 先檢查用戶是否提供了自定義代理
                 const customProxy = document.getElementById('cors-proxy')?.value?.trim();
                 if (customProxy) {
-                    // 確保代理URL以/結尾
                     return customProxy.endsWith('/') ? customProxy : customProxy + '/';
                 }
                 
-                // 測試預設代理
                 for (const proxy of DEFAULT_PROXIES) {
                     try {
                         const testUrl = `${proxy}https://httpbin.org/get`;
@@ -273,7 +270,6 @@
                 console.error("選擇代理時出錯:", error);
             }
             
-            // 如果所有代理都不可用，使用第一個（會提示用戶出錯）
             console.warn("所有代理都不可用，使用默認代理");
             return DEFAULT_PROXIES[0];
         }
@@ -289,7 +285,6 @@
             
             errorAlert.classList.remove('hidden');
             
-            // 5秒後自動隱藏
             setTimeout(() => {
                 errorAlert.classList.add('hidden');
             }, 5000);
@@ -306,975 +301,202 @@
             
             successAlert.classList.remove('hidden');
             
-            // 5秒後自動隱藏
             setTimeout(() => {
                 successAlert.classList.add('hidden');
             }, 5000);
         }
 
-        // 診斷 Notion 連接問題
-        async function diagnoseNotionConnection(notionToken, databaseId) {
-          try {
-            // 步驟 1: 測試 API 密鑰有效性
-            const proxy = await getWorkingProxy();
-            const userUrl = `${proxy}${NOTION_API_BASE}/users/me`;
-            
-            console.log("測試 API 密鑰...");
-            const userResponse = await fetch(userUrl, {
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${notionToken}`,
-                'Notion-Version': NOTION_VERSION
-              }
-            });
-            
-            if (!userResponse.ok) {
-              if (userResponse.status === 401) {
-                return { success: false, error: "API 密鑰無效或過期" };
-              } else {
-                const errorData = await userResponse.json();
-                return { success: false, error: `API 錯誤: ${errorData.message || userResponse.status}` };
-              }
-            }
-            
-            // 步驟 2: 測試資料庫訪問
-            console.log("測試資料庫訪問...");
-            const dbUrl = `${proxy}${NOTION_API_BASE}/databases/${databaseId}`;
-            
-            const dbResponse = await fetch(dbUrl, {
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${notionToken}`,
-                'Notion-Version': NOTION_VERSION
-              }
-            });
-            
-            if (!dbResponse.ok) {
-              if (dbResponse.status === 404) {
-                return { success: false, error: "找不到資料庫，請檢查資料庫 ID 是否正確" };
-              } else if (dbResponse.status === 403) {
-                return { success: false, error: "沒有權限訪問此資料庫，請確保已共享給您的整合" };
-              } else {
-                const errorData = await dbResponse.json();
-                return { success: false, error: `資料庫訪問錯誤: ${errorData.message || dbResponse.status}` };
-              }
-            }
-            
-            // 步驟 3: 檢查資料庫結構
-            const dbData = await dbResponse.json();
-            const requiredProperties = ['名稱', '金額', '日期', '類別', '備註', '付款方式'];
-            const missingProperties = [];
-            
-            for (const prop of requiredProperties) {
-              if (!dbData.properties[prop]) {
-                missingProperties.push(prop);
-              }
-            }
-            
-            if (missingProperties.length > 0) {
-              return { 
-                success: false, 
-                error: `資料庫缺少必要欄位: ${missingProperties.join(', ')}` 
-              };
-            }
-            
-            return { success: true, message: "連接成功！API 密鑰有效，資料庫可訪問，結構正確。" };
-            
-          } catch (error) {
-            return { success: false, error: `診斷過程中發生錯誤: ${error.message}` };
-          }
-        }
-
-        // 更新商家分類對照表以匹配Notion中的固定類別
-        const categoryMap = {
-            // 生活用品
-            'SUPERMARKET': '生活用品', 'PARKNSHOP': '生活用品', 'WELLCOME': '生活用品',
-            'WATSONS': '生活用品', 'MARKET': '生活用品',
-
-            // 知識學習
-            'BOOKSTORE': '知識學習', 'COURSE': '知識學習', 'EDUCATION': '知識學習',
-
-            // 休閒娛樂
-            'MOVIE': '休閒娛樂', 'CINEMA': '休閒娛樂', 'NETFLIX': '休閒娛樂',
-            'SPOTIFY': '休閒娛樂', 'DISNEY': '休閒娛樂', 'GAME': '休閒娛樂',
-
-            // 交通
-            'UBER': '交通', 'TAXI': '交通', 'MTR': '交通', 'BUS': '交通',
-            'TRANSPORT': '交通', 'OCTOPUS': '交通',
-
-            // 健康醫療
-            'DOCTOR': '健康醫療', 'CLINIC': '健康醫療', 'HOSPITAL': '健康醫療',
-            'PHARMACY': '健康醫療', 'MEDICAL': '健康醫療',
-
-            // 訂閱
-            'SUBSCRIPTION': '訂閱', 'MAGAZINE': '訂閱', 'MEMBERSHIP': '訂閱',
-
-            // 固定支出
-            'RENT': '固定支出', 'MORTGAGE': '固定支出', 'LOAN': '固定支出',
-
-            // 美妝
-            'COSMETICS': '美妝', 'BEAUTY': '美妝', 'SKINCARE': '美妝',
-
-            // 服飾配件
-            'CLOTHING': '服飾配件', 'FASHION': '服飾配件', 'ACCESSORIES': '服飾配件',
-
-            // 餐飲
-            'CAFE': '餐飲', 'RESTAURANT': '餐飲', 'MCDONALDS': '餐飲',
-            'STARBUCKS': '餐飲', 'FOOD': '餐飲', 'PIZZA': '餐飲',
-
-            // 其他
-            'OTHER': '其他'
-        };
-
-        // 根據商家名稱分類交易
-        function categorizeTransaction(description) {
-            try {
-                if (!description) return '其他';
-                
-                description = description.toUpperCase();
-                
-                for (const [keyword, category] of Object.entries(categoryMap)) {
-                    if (description.includes(keyword.toUpperCase())) {
-                        return category;
-                    }
-                }
-            } catch (error) {
-                console.error("分類交易時出錯:", error);
-            }
-            
-            return '其他'; // 預設類別
-        }
-        
-        // 獲取類別的顏色
-        function getCategoryColor(category) {
-            try {
-                const colorMap = {
-                    '餐飲': 'bg-red-100 text-red-800',
-                    '交通': 'bg-blue-100 text-blue-800',
-                    '購物': 'bg-yellow-100 text-yellow-800',
-                    '娛樂': 'bg-purple-100 text-purple-800',
-                    '繳費': 'bg-green-100 text-green-800',
-                    '健康': 'bg-indigo-100 text-indigo-800',
-                    '生活用品': 'bg-yellow-100 text-yellow-800',
-                    '知識學習': 'bg-indigo-100 text-indigo-800',
-                    '休閒娛樂': 'bg-purple-100 text-purple-800',
-                    '健康醫療': 'bg-green-100 text-green-800',
-                    '訂閱': 'bg-blue-100 text-blue-800',
-                    '固定支出': 'bg-gray-100 text-gray-800',
-                    '美妝': 'bg-pink-100 text-pink-800',
-                    '服飾配件': 'bg-purple-100 text-purple-800',
-                    '其他': 'bg-gray-100 text-gray-800'
-                };
-                
-                return colorMap[category] || 'bg-gray-100 text-gray-800';
-            } catch (error) {
-                console.error("獲取類別顏色時出錯:", error);
-                return 'bg-gray-100 text-gray-800';
-            }
-        }
-
-        // 用於存儲解析的交易資料
-        let transactions = [];
-
-        // 設置頁面的事件處理程序
-        document.addEventListener('DOMContentLoaded', function() {
-            try {
-                const uploadButton = document.getElementById('upload-button');
-                const pdfUpload = document.getElementById('pdf-upload');
-                const backToUpload = document.getElementById('back-to-upload');
-                const proceedToSubmit = document.getElementById('proceed-to-submit');
-                const newUpload = document.getElementById('new-upload');
-                const imageUploadButton = document.getElementById('image-upload-button');
-                const dropZone = document.getElementById('drop-zone');
-                const closeError = document.getElementById('close-error');
-                const closeSuccess = document.getElementById('close-success');
-                const testConnection = document.getElementById('test-connection');
-                
-                // 關閉錯誤訊息
-                closeError.addEventListener('click', function() {
-                    document.getElementById('error-alert').classList.add('hidden');
-                });
-                
-                // 關閉成功訊息
-                closeSuccess.addEventListener('click', function() {
-                    document.getElementById('success-alert').classList.add('hidden');
-                });
-                
-                // 測試連接按鈕
-                testConnection.addEventListener('click', async function() {
-                    try {
-                        const notionToken = document.getElementById('notion-token').value.trim();
-                        const databaseId = document.getElementById('database-id').value.trim();
-                        
-                        if (!notionToken) {
-                            showError('請輸入 Notion API 密鑰');
-                            document.getElementById('notion-token').focus();
-                            return;
-                        }
-                        
-                        if (!databaseId) {
-                            showError('請輸入 Notion 資料庫 ID');
-                            document.getElementById('database-id').focus();
-                            return;
-                        }
-                        
-                        // 檢查API密鑰格式
-                        if (!notionToken.startsWith('secret_')) {
-                            showError('Notion API 密鑰格式錯誤', '應以 secret_ 開頭');
-                            document.getElementById('notion-token').focus();
-                            return;
-                        }
-                        
-                        showLoading(true, '測試連接中...');
-                        
-                        const result = await diagnoseNotionConnection(notionToken, databaseId);
-                        
-                        if (result.success) {
-                            showSuccess('連接成功', result.message);
-                        } else {
-                            showError('連接失敗', result.error);
-                        }
-                    } catch (error) {
-                        console.error("測試連接時出錯:", error);
-                        showError('測試連接時出錯', error.message);
-                    } finally {
-                        showLoading(false);
-                    }
-                });
-                
-                // 上傳按鈕點擊事件
-                uploadButton.addEventListener('click', function() {
-                    pdfUpload.click();
-                });
-                
-                // 檔案選擇事件
-                pdfUpload.addEventListener('change', function(e) {
-                    try {
-                        if (e.target.files.length > 0) {
-                            const file = e.target.files[0];
-                            if (!file || file.type !== 'application/pdf') {
-                                showError('檔案類型錯誤', '請上傳有效的 PDF 檔案！');
-                                return;
-                            }
-                            showLoading(true, '正在解析 PDF 檔案...');
-                            
-                            // 設置處理超時
-                            resetProcessingTimeout(() => {
-                                showLoading(false);
-                                showError('處理 PDF 超時', '處理時間過長，請嘗試上傳較小的檔案或使用圖片上傳方式。');
-                            });
-                            
-                            processPDF(file);
-                        }
-                    } catch (error) {
-                        console.error("處理檔案選擇時出錯:", error);
-                        showLoading(false);
-                        showError('處理檔案時出錯', error.message);
-                    }
-                });
-                
-                // 圖片上傳按鈕點擊事件
-                imageUploadButton.addEventListener('click', () => {
-                    try {
-                        const imageUploadInput = document.createElement('input');
-                        imageUploadInput.type = 'file';
-                        imageUploadInput.accept = 'image/*';
-                        imageUploadInput.addEventListener('change', (e) => {
-                            try {
-                                if (e.target.files.length > 0) {
-                                    const file = e.target.files[0];
-                                    showLoading(true, '正在處理圖片...');
-                                    
-                                    // 設置處理超時
-                                    resetProcessingTimeout(() => {
-                                        showLoading(false);
-                                        showError('處理圖片超時', '處理時間過長，請嘗試上傳較小的圖片或使用PDF上傳方式。');
-                                    });
-                                    
-                                    processImage(file);
-                                }
-                            } catch (error) {
-                                console.error("處理圖片選擇時出錯:", error);
-                                showLoading(false);
-                                showError('處理圖片時出錯', error.message);
-                            }
-                        });
-                        imageUploadInput.click();
-                    } catch (error) {
-                        console.error("創建圖片上傳輸入框時出錯:", error);
-                        showError('創建圖片上傳時出錯', error.message);
-                    }
-                });
-                
-                // 返回按鈕點擊事件
-                backToUpload.addEventListener('click', function() {
-                    try {
-                        showSection('upload-section');
-                        setActiveStep(1);
-                    } catch (error) {
-                        console.error("返回上傳頁面時出錯:", error);
-                        showError('返回上傳頁面時出錯', error.message);
-                    }
-                });
-                
-                // 送出按鈕點擊事件
-                proceedToSubmit.addEventListener('click', function() {
-                    try {
-                        // 驗證 Notion API 密鑰和資料庫 ID
-                        const notionToken = document.getElementById('notion-token').value.trim();
-                        const databaseId = document.getElementById('database-id').value.trim();
-                        
-                        if (!notionToken) {
-                            showError('請輸入 Notion API 密鑰');
-                            document.getElementById('notion-token').focus();
-                            return;
-                        }
-                        
-                        if (!databaseId) {
-                            showError('請輸入 Notion 資料庫 ID');
-                            document.getElementById('database-id').focus();
-                            return;
-                        }
-                        
-                        // 檢查API密鑰格式
-                        if (!notionToken.startsWith('secret_')) {
-                            showError('Notion API 密鑰格式錯誤', '應以 secret_ 開頭');
-                            document.getElementById('notion-token').focus();
-                            return;
-                        }
-                        
-                        showLoading(true, '正在連接 Notion API...');
-                        
-                        // 設置處理超時
-                        resetProcessingTimeout(() => {
-                            showLoading(false);
-                            showError('連接 Notion API 超時', '請檢查您的網絡連接或稍後再試。');
-                        });
-                        
-                        submitToNotion();
-                    } catch (error) {
-                        console.error("處理提交時出錯:", error);
-                        showLoading(false);
-                        showError('處理提交時出錯', error.message);
-                    }
-                });
-                
-                // 上傳新檔案按鈕點擊事件
-                newUpload.addEventListener('click', function() {
-                    try {
-                        // 清除之前的資料，包括 API 密鑰和資料庫 ID
-                        pdfUpload.value = '';
-                        document.getElementById('notion-token').value = '';
-                        document.getElementById('database-id').value = '';
-                        transactions = [];
-                        
-                        showSection('upload-section');
-                        setActiveStep(1);
-                    } catch (error) {
-                        console.error("返回上傳新檔案時出錯:", error);
-                        showError('返回上傳頁面時出錯', error.message);
-                    }
-                });
-                
-                // 拖放支持
-                dropZone.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    dropZone.classList.add('border-blue-500');
-                });
-                
-                dropZone.addEventListener('dragleave', () => {
-                    dropZone.classList.remove('border-blue-500');
-                });
-                
-                dropZone.addEventListener('drop', (e) => {
-                    try {
-                        e.preventDefault();
-                        dropZone.classList.remove('border-blue-500');
-                        
-                        if (e.dataTransfer.files.length > 0) {
-                            const file = e.dataTransfer.files[0];
-                            if (file.type === 'application/pdf') {
-                                showLoading(true, '正在解析 PDF 檔案...');
-                                
-                                // 設置處理超時
-                                resetProcessingTimeout(() => {
-                                    showLoading(false);
-                                    showError('處理 PDF 超時', '處理時間過長，請嘗試上傳較小的檔案或使用圖片上傳方式。');
-                                });
-                                
-                                processPDF(file);
-                            } else if (file.type.startsWith('image/')) {
-                                showLoading(true, '正在處理圖片...');
-                                
-                                // 設置處理超時
-                                resetProcessingTimeout(() => {
-                                    showLoading(false);
-                                    showError('處理圖片超時', '處理時間過長，請嘗試上傳較小的圖片或使用PDF上傳方式。');
-                                });
-                                
-                                processImage(file);
-                            } else {
-                                showError('檔案類型錯誤', '請上傳PDF檔案或圖片檔案');
-                            }
-                        }
-                    } catch (error) {
-                        console.error("處理拖放時出錯:", error);
-                        showLoading(false);
-                        showError('處理拖放時出錯', error.message);
-                    }
-                });
-            } catch (error) {
-                console.error("設置事件處理程序時出錯:", error);
-                showError('初始化頁面時出錯', error.message);
-            }
-        });
-
-        // 設置處理超時
-        function resetProcessingTimeout(callback) {
-            try {
-                // 清除之前的超時
-                if (processingTimeoutId !== null) {
-                    clearTimeout(processingTimeoutId);
-                }
-                
-                // 設置新的超時
-                processingTimeoutId = setTimeout(() => {
-                    processingTimeoutId = null;
-                    if (callback) callback();
-                }, PROCESSING_TIMEOUT);
-            } catch (error) {
-                console.error("設置處理超時時出錯:", error);
-            }
-        }
-        
-        // 清除處理超時
-        function clearProcessingTimeout() {
-            try {
-                if (processingTimeoutId !== null) {
-                    clearTimeout(processingTimeoutId);
-                    processingTimeoutId = null;
-                }
-            } catch (error) {
-                console.error("清除處理超時時出錯:", error);
-            }
-        }
-
-        // 設置活動步驟
-        function setActiveStep(stepNumber) {
-            try {
-                document.querySelectorAll('.step').forEach((step, index) => {
-                    if (index + 1 === stepNumber) {
-                        step.classList.remove('text-gray-400', 'border-gray-200');
-                        step.classList.add('text-blue-600', 'border-blue-600');
-                    } else if (index + 1 < stepNumber) {
-                        step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-400', 'border-gray-200');
-                        step.classList.add('text-gray-600', 'border-gray-400');
-                    } else {
-                        step.classList.remove('text-blue-600', 'border-blue-600', 'text-gray-600', 'border-gray-400');
-                        step.classList.add('text-gray-400', 'border-gray-200');
-                    }
-                });
-            } catch (error) {
-                console.error("設置活動步驟時出錯:", error);
-            }
-        }
-
-        // 顯示/隱藏載入指示器
-        function showLoading(show, text = '處理中，請稍候...') {
-            try {
-                const loading = document.getElementById('loading');
-                const loadingText = document.querySelector('.loading-text');
-                
-                if (show) {
-                    loadingText.textContent = text;
-                    loading.style.display = 'flex';
-                } else {
-                    loading.style.display = 'none';
-                    clearProcessingTimeout();
-                }
-            } catch (error) {
-                console.error("顯示/隱藏載入指示器時出錯:", error);
-            }
-        }
-
-        // 顯示指定區域，隱藏其他區域
-        function showSection(sectionId) {
-            try {
-                const sections = ['upload-section', 'preview-section', 'result-section'];
-                sections.forEach(id => {
-                    const section = document.getElementById(id);
-                    if (id === sectionId) {
-                        section.classList.remove('hidden');
-                    } else {
-                        section.classList.add('hidden');
-                    }
-                });
-            } catch (error) {
-                console.error("顯示區域時出錯:", error);
-            }
-        }
-
-        // 處理PDF檔案
-        async function processPDF(file) {
-            try {
-                const arrayBuffer = await file.arrayBuffer();
-                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                
-                // 提取文本內容
-                let fullText = '';
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const textContent = await page.getTextContent();
-                    const pageText = textContent.items.map(item => item.str).join(' ');
-                    fullText += pageText + '\n';
-                }
-                
-                console.log('從PDF提取的文本:', fullText);
-                
-                // 提取交易資料
-                extractTransactions(fullText);
-                
-                // 如果沒有提取到交易，顯示提示
-                if (transactions.length === 0) {
-                    showError('未能提取交易數據', '未能從PDF中提取到任何交易資料。請確保PDF格式正確。');
-                    showLoading(false);
-                    return;
-                }
-                
-                // 清空先前可能存在的敏感資料
-                document.getElementById('notion-token').value = '';
-                document.getElementById('database-id').value = '';
-                
-                // 顯示預覽
-                populateTransactionsPreview();
-                showSection('preview-section');
-                setActiveStep(2);
-                
-            } catch (error) {
-                console.error('處理 PDF 時出錯:', error);
-                showError('處理 PDF 時出錯', error.message);
-            } finally {
-                clearProcessingTimeout();
-                showLoading(false); // 確保無論成功或失敗都隱藏 loading
-            }
-        }
-
-        // 新增圖片上傳與解析功能
-        function processImage(file) {
-            try {
-                Tesseract.recognize(
-                    file, // 圖片文件
-                    'eng+chi_tra', // 語言設置，同時支持英文和繁體中文
-                    {
-                        logger: info => {
-                            console.log(info);
-                            if (info.status === 'recognizing text') {
-                                showLoading(true, `OCR識別中: ${Math.round(info.progress * 100)}%`);
-                            }
-                        }
-                    }
-                ).then(({ data: { text } }) => {
-                    console.log('OCR 提取的文字:', text);
-                    extractTransactions(text); // 使用現有的交易提取邏輯
-                    
-                    // 如果沒有提取到交易，顯示提示
-                    if (transactions.length === 0) {
-                        showError('未能提取交易數據', '未能從圖片中提取到任何交易資料。請確保圖片清晰且包含交易資訊。');
-                        showLoading(false);
-                        return;
-                    }
-                    
-                    // 清空先前可能存在的敏感資料
-                    document.getElementById('notion-token').value = '';
-                    document.getElementById('database-id').value = '';
-                    
-                    populateTransactionsPreview(); // 填充預覽表格
-                    showSection('preview-section');
-                    setActiveStep(2);
-                }).catch(error => {
-                    console.error('處理圖片時出錯:', error);
-                    showError('處理圖片時出錯', error.message);
-                }).finally(() => {
-                    clearProcessingTimeout();
-                    showLoading(false);
-                });
-            } catch (error) {
-                console.error('處理圖片時出錯:', error);
-                showError('處理圖片時出錯', error.message);
-                showLoading(false);
-            }
-        }
-
-        // 更新交易解析邏輯以提取所需的欄位
-        function extractTransactions(text) {
-            try {
-                console.log('提取的文字:', text); // 加入日誌
-                
-                // 清空之前的交易記錄
-                transactions = [];
-                
-                // 優化正則表達式，增加對不同格式的支持
-                // 1. 標準格式：日期 日期 描述 金額
-                const standardRegex = /(\d{1,2} [A-Z]{3} \d{4})\s+(\d{1,2} [A-Z]{3} \d{4})\s+([^\n]+?)\s+([\d,.]+(?:-)?)\s*$/gm;
-                
-                // 2. 替代格式：日期（可能有時間） 描述 金額（可能有貨幣符號）
-                const altRegex = /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})(?:\s+\d{1,2}:\d{2})?\s+([^\n\$]+?)\s+\$?\s*([\d,.]+)/gm;
-                
-                // 處理標準格式
-                let match;
-                while ((match = standardRegex.exec(text)) !== null) {
-                    console.log('匹配到的標準格式交易:', match); // 加入日誌
-                    
-                    // 提取日期、描述和金額
-                    const transactionDate = match[1]; // 第一個日期
-                    const postingDate = match[2];     // 第二個日期
-                    const description = match[3].trim();
-                    const amountStr = match[4].replace(/,/g, '');
-                    const amount = parseFloat(amountStr);
-                    
-                    if (!isNaN(amount) && description) {
-                        // 根據商家名稱分類交易
-                        const category = categorizeTransaction(description);
-                        
-                        // 將交易添加到陣列
-                        transactions.push({
-                            name: description,
-                            amount: amount,
-                            date: transactionDate,
-                            category: category,
-                            note: '',
-                            paymentMethod: '信用卡'
-                        });
-                    }
-                }
-                
-                // 如果標準格式沒有匹配到交易，嘗試替代格式
-                if (transactions.length === 0) {
-                    while ((match = altRegex.exec(text)) !== null) {
-                        console.log('匹配到的替代格式交易:', match); // 加入日誌
-                        
-                        // 提取日期、描述和金額
-                        const transactionDate = match[1]; // 日期
-                        const description = match[2].trim();
-                        const amountStr = match[3].replace(/,/g, '');
-                        const amount = parseFloat(amountStr);
-                        
-                        if (!isNaN(amount) && description) {
-                            // 根據商家名稱分類交易
-                            const category = categorizeTransaction(description);
-                            
-                            // 將交易添加到陣列
-                            transactions.push({
-                                name: description,
-                                amount: amount,
-                                date: transactionDate,
-                                category: category,
-                                note: '',
-                                paymentMethod: '信用卡'
-                            });
-                        }
-                    }
-                }
-                
-                // 如果還是沒有找到交易，嘗試更寬鬆的匹配
-                if (transactions.length === 0) {
-                    // 尋找任何可能的交易行
-                    const looseRegex = /(.{10,50})\s+(\d+\.\d{2})/g;
-                    while ((match = looseRegex.exec(text)) !== null) {
-                        console.log('寬鬆匹配到的可能交易:', match);
-                        const description = match[1].trim();
-                        const amountStr = match[2].replace(/,/g, '');
-                        const amount = parseFloat(amountStr);
-                        
-                        if (!isNaN(amount) && description && !description.match(/^\d+$/)) {
-                            const category = categorizeTransaction(description);
-                            const today = new Date();
-                            const transactionDate = `${today.getDate()} ${['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][today.getMonth()]} ${today.getFullYear()}`;
-                            
-                            transactions.push({
-                                name: description,
-                                amount: amount,
-                                date: transactionDate,
-                                category: category,
-                                note: '自動識別，請確認',
-                                paymentMethod: '信用卡'
-                            });
-                        }
-                    }
-                }
-                
-                console.log('提取的交易資料:', transactions);
-            } catch (error) {
-                console.error("提取交易資料時出錯:", error);
-                showError('提取交易資料時出錯', error.message);
-            }
-        }
-
-        // 更新預覽表格以顯示新欄位
-        function populateTransactionsPreview() {
-            try {
-                const tbody = document.getElementById('transactions-preview');
-                tbody.innerHTML = '';
-
-                transactions.forEach((transaction, index) => {
-                    const row = document.createElement('tr');
-                    row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-
-                    // 名稱
-                    const nameCell = document.createElement('td');
-                    nameCell.className = 'px-3 py-2 text-sm';
-                    nameCell.textContent = transaction.name;
-                    row.appendChild(nameCell);
-
-                    // 金額
-                    const amountCell = document.createElement('td');
-                    amountCell.className = 'px-3 py-2 text-sm';
-                    amountCell.textContent = transaction.amount.toFixed(2);
-                    row.appendChild(amountCell);
-
-                    // 日期
-                    const dateCell = document.createElement('td');
-                    dateCell.className = 'px-3 py-2 text-sm';
-                    dateCell.textContent = transaction.date;
-                    row.appendChild(dateCell);
-
-                    // 類別
-                    const categoryCell = document.createElement('td');
-                    categoryCell.className = 'px-3 py-2 text-sm';
-                    
-                    const categorySpan = document.createElement('span');
-                    categorySpan.className = 'category-badge ' + getCategoryColor(transaction.category);
-                    categorySpan.textContent = transaction.category;
-                    
-                    categoryCell.appendChild(categorySpan);
-                    row.appendChild(categoryCell);
-
-                    // 備註
-                    const noteCell = document.createElement('td');
-                    noteCell.className = 'px-3 py-2 text-sm';
-                    
-                    const noteInput = document.createElement('input');
-                    noteInput.type = 'text';
-                    noteInput.className = 'border rounded px-2 py-1 w-full';
-                    noteInput.value = transaction.note;
-                    noteInput.addEventListener('input', (e) => {
-                        transactions[index].note = e.target.value;
-                    });
-                    
-                    noteCell.appendChild(noteInput);
-                    row.appendChild(noteCell);
-
-                    // 付款方式
-                    const paymentMethodCell = document.createElement('td');
-                    paymentMethodCell.className = 'px-3 py-2 text-sm';
-                    
-                    const paymentMethodSelect = document.createElement('select');
-                    paymentMethodSelect.className = 'border rounded px-2 py-1 w-full';
-                    
-                    ['信用卡', '現金', '轉帳'].forEach((method) => {
-                        const option = document.createElement('option');
-                        option.value = method;
-                        option.textContent = method;
-                        if (method === transaction.paymentMethod) {
-                            option.selected = true;
-                        }
-                        paymentMethodSelect.appendChild(option);
-                    });
-                    
-                    paymentMethodSelect.addEventListener('change', (e) => {
-                        transactions[index].paymentMethod = e.target.value;
-                    });
-                    
-                    paymentMethodCell.appendChild(paymentMethodSelect);
-                    row.appendChild(paymentMethodCell);
-
-                    tbody.appendChild(row);
-                });
-            } catch (error) {
-                console.error("填充交易預覽時出錯:", error);
-                showError('顯示交易預覽時出錯', error.message);
-            }
-        }
-
-        // 直接調用Notion API的函數
+        // 改進 API 請求的詳細日誌和錯誤處理
         async function callNotionAPI(endpoint, method, token, body = null) {
             try {
                 const proxy = await getWorkingProxy();
+                if (!proxy) {
+                    throw new Error("無法選擇有效的代理");
+                }
+
                 const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
-                
-                console.log(`API請求: ${method} ${url}`);
-                
+                console.log(`API請求: ${method} ${url}`, body ? `Body: ${JSON.stringify(body)}` : "");
+
                 const headers = {
                     'Authorization': `Bearer ${token}`,
                     'Notion-Version': NOTION_VERSION,
                     'Content-Type': 'application/json'
                 };
-                
+
                 const options = {
                     method: method,
                     headers: headers
                 };
-                
+
                 if (body) {
                     options.body = JSON.stringify(body);
                 }
-                
+
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超時
+                const timeoutId = setTimeout(() => controller.abort(), 30000);
                 options.signal = controller.signal;
+
+                let response;
+                try {
+                    response = await fetch(url, options);
+                    clearTimeout(timeoutId);
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    if (error.name === 'AbortError') {
+                        console.error("API請求超時:", url);
+                        throw new Error("API請求超時");
+                    }
+                    console.error("網路錯誤或請求中止:", error.message, url);
+                    throw new Error(`網路錯誤或請求中止: ${error.message}`);
+                }
+
+                if (!response.ok) {
+                    let errorData;
+                    let errorMessage = `HTTP 錯誤 ${response.status}: ${response.statusText}`;
+                    try {
+                        errorData = await response.json();
+                        if (errorData && errorData.message) {
+                            errorMessage = `API 錯誤: ${errorData.message}`;
+                        } else if (errorData && errorData.code) {
+                            errorMessage = `API 錯誤 (${errorData.code}): ${errorData.message || '未知Notion錯誤'}`;
+                        }
+                        console.error("API響應錯誤 (JSON):", errorData, "Status:", response.status);
+                    } catch (e) {
+                        try {
+                            const textError = await response.text();
+                            errorMessage = `API 錯誤 ${response.status}: ${textError.substring(0, 200)}`;
+                            console.error("API響應錯誤 (Text):", textError, "Status:", response.status);
+                        } catch (textE) {
+                            console.error("無法解析API錯誤響應", "Status:", response.status);
+                        }
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                if (response.headers.get("content-length") === "0" || response.status === 204) {
+                    return null; 
+                }
                 
                 try {
-                    const response = await fetch(url, options);
-                    clearTimeout(timeoutId);
-                    
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.message || `API請求失敗：${response.status}`);
-                    }
-                    
                     return await response.json();
-                } catch (error) {
-                    if (error.name === 'AbortError') {
-                        throw new Error('請求超時，請檢查您的網絡連接或稍後再試');
-                    }
-                    throw error;
+                } catch (jsonParseError) {
+                    console.error("無法解析成功的API響應為JSON:", jsonParseError);
+                    throw new Error("API響應成功，但無法解析JSON內容");
                 }
-            } catch (error) {
-                console.error('API調用錯誤:', error);
-                throw error;
+
+            } catch (error) { 
+                console.error('API調用最終錯誤:', error.message);
+                showError('API 調用失敗', error.message || '發生未知錯誤');
+                throw error; 
             }
         }
 
-        // 創建Notion頁面
-        async function createNotionPage(token, databaseId, transaction) {
+        // 重構 Notion 連接診斷邏輯，使用 callNotionAPI
+        async function diagnoseNotionConnection(notionToken, databaseId) {
+            console.log("開始 Notion 連接診斷...");
+            showLoading(true, "正在測試連接...");
+
             try {
-                const pageData = {
-                    parent: { database_id: databaseId },
-                    properties: {
-                        名稱: { title: [{ text: { content: transaction.name } }] },
-                        金額: { number: transaction.amount },
-                        日期: { date: { start: transaction.date } },
-                        類別: { select: { name: transaction.category } },
-                        備註: { rich_text: [{ text: { content: transaction.note || '' } }] },
-                        付款方式: { select: { name: transaction.paymentMethod } },
+                console.log("步驟 1: 測試 API 金鑰有效性 (users/me)...");
+                try {
+                    await callNotionAPI('users/me', 'GET', notionToken);
+                    console.log("API 金鑰有效。");
+                } catch (e) {
+                    return { success: false, error: `API 金鑰測試失敗: ${e.message}. 請檢查您的 API 金鑰是否正確且具有所需權限。` };
+                }
+
+                console.log(`步驟 2: 測試資料庫訪問 (${databaseId})...`);
+                let dbData;
+                try {
+                    dbData = await callNotionAPI(`databases/${databaseId}`, 'GET', notionToken);
+                    if (!dbData) {
+                        throw new Error("成功獲取資料庫，但未返回數據。");
                     }
-                };
-                
-                return await callNotionAPI('pages', 'POST', token, pageData);
+                    console.log("資料庫可訪問。");
+                } catch (e) {
+                    return { success: false, error: `資料庫訪問測試失敗: ${e.message}. 請檢查資料庫ID是否正確，以及您的 Notion Integration 是否已共享給此資料庫並具有讀取權限。` };
+                }
+
+                console.log("步驟 3: 檢查資料庫結構...");
+                const requiredProperties = ['名稱', '金額', '日期', '類別', '備註', '付款方式'];
+                const missingProperties = [];
+                const dbProperties = dbData.properties || {};
+
+                for (const propName of requiredProperties) {
+                    if (!dbProperties[propName]) {
+                        missingProperties.push(propName);
+                    }
+                }
+
+                if (missingProperties.length > 0) {
+                    const errorMsg = `資料庫結構檢查失敗: 缺少必要欄位: ${missingProperties.join(', ')}。請確保資料庫包含這些欄位 (且名稱完全匹配)：${requiredProperties.join(', ')}。`;
+                    console.warn(errorMsg);
+                    return { success: false, error: errorMsg };
+                }
+                console.log("資料庫結構有效。");
+
+                return { success: true, message: "連接成功！API 金鑰有效，資料庫可訪問且結構正確。" };
+
             } catch (error) {
-                console.error('創建Notion頁面時出錯:', error);
-                throw error;
+                console.error("診斷過程中發生未預期錯誤:", error);
+                return { success: false, error: `診斷過程中發生意外錯誤: ${error.message}` };
+            } finally {
+                showLoading(false);
             }
         }
 
-        // 送出資料至 Notion
-        async function submitToNotion() {
-            try {
-                const notionToken = document.getElementById('notion-token').value.trim();
-                const databaseId = document.getElementById('database-id').value.trim();
-                
-                // 再次驗證輸入
-                if (!notionToken || !databaseId) {
-                    showError('缺少必要資訊', '請輸入Notion API密鑰和資料庫ID');
-                    showLoading(false);
-                    return;
-                }
-                
-                // 顯示處理進度
-                const resultContent = document.getElementById('result-content');
-                resultContent.innerHTML = `
-                    <div class="p-4 bg-blue-100 text-blue-800 rounded-lg">
-                        <p>正在處理交易資料，請稍候...</p>
-                        <div class="mt-2 bg-blue-200 rounded-full h-2.5">
-                            <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
-                        </div>
-                        <p id="progress-text">0/${transactions.length} 筆交易已處理</p>
-                    </div>
-                `;
-                
-                showSection('result-section');
-                setActiveStep(3);
-                
-                // 首先檢查資料庫訪問權限
-                showLoading(true, '驗證Notion API資訊...');
-                const dbCheckResult = await diagnoseNotionConnection(notionToken, databaseId);
-                if (!dbCheckResult.success) {
-                    throw new Error(dbCheckResult.error);
-                }
-                
-                // 處理成功及失敗數量統計
-                let successCount = 0;
-                let failCount = 0;
-                let errors = [];
-                
-                // 逐個處理交易
-                for (let i = 0; i < transactions.length; i++) {
-                    try {
-                        showLoading(true, `處理交易 ${i+1}/${transactions.length}...`);
-                        
-                        await createNotionPage(notionToken, databaseId, transactions[i]);
-                        successCount++;
-                    } catch (error) {
-                        failCount++;
-                        errors.push({
-                            transaction: transactions[i].name,
-                            error: error.message
-                        });
+        function showLoading(isLoading, message = "處理中，請稍候...") {
+            const loadingDiv = document.getElementById('loading');
+            if (!loadingDiv) return;
+            const loadingText = loadingDiv.querySelector('.loading-text');
+            
+            if (isLoading) {
+                if (loadingText) loadingText.textContent = message;
+                loadingDiv.style.display = 'flex';
+            } else {
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const testConnectionButton = document.getElementById('test-connection');
+            if (testConnectionButton) {
+                testConnectionButton.addEventListener('click', async () => {
+                    const token = document.getElementById('notion-token').value;
+                    const dbId = document.getElementById('database-id').value;
+
+                    if (!token || !dbId) {
+                        showError("請輸入 Notion API 金鑰和資料庫 ID。");
+                        return;
                     }
                     
-                    // 更新進度
-                    const progressPercent = Math.round(((i + 1) / transactions.length) * 100);
-                    document.getElementById('progress-bar').style.width = `${progressPercent}%`;
-                    document.getElementById('progress-text').textContent = 
-                        `${i + 1}/${transactions.length} 筆交易已處理`;
-                }
-                
-                // 顯示最終結果
-                resultContent.innerHTML = `
-                    <div class="p-4 ${successCount > 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} rounded-lg">
-                        <p>處理完成！</p>
-                        <p>成功: ${successCount} 筆</p>
-                        <p>失敗: ${failCount} 筆</p>
-                        ${failCount > 0 ? `
-                        <div class="mt-2 p-2 bg-white rounded">
-                            <p class="font-bold">失敗詳情:</p>
-                            <ul class="list-disc pl-5">
-                                ${errors.map(e => `<li>${e.transaction}: ${e.error}</li>`).join('')}
-                            </ul>
-                        </div>` : ''}
-                    </div>
-                    <div class="mt-4 p-3 bg-blue-50 text-blue-800 rounded-lg">
-                        <p class="text-sm">為了保障您的資料安全，API 密鑰和資料庫 ID 不會被儲存。下次使用時需要重新輸入。</p>
-                    </div>
-                `;
-                
-                // 清空敏感資料
-                document.getElementById('notion-token').value = '';
-                document.getElementById('database-id').value = '';
-                
-            } catch (error) {
-                console.error('送出資料至 Notion 時出錯:', error);
-                
-                const resultContent = document.getElementById('result-content');
-                resultContent.innerHTML = `
-                    <div class="p-4 bg-red-100 text-red-800 rounded-lg">
-                        <p>處理交易時出錯:</p>
-                        <p class="mt-2 p-2 bg-white rounded">${error.message}</p>
-                    </div>
-                    <div class="mt-4 p-3 bg-yellow-50 text-yellow-800 rounded-lg">
-                        <p class="text-sm">如果您遇到CORS相關錯誤，請嘗試以下操作:</p>
-                        <ul class="list-disc pl-5 text-sm">
-                            <li>使用其他CORS代理服務</li>
-                            <li>使用瀏覽器擴充功能暫時禁用CORS（如：<a href="https://chrome.google.com/webstore/detail/cors-unblock/lfhmikememgdcahcdlaciloancbhjino" target="_blank" class="underline">CORS Unblock</a>）</li>
-                            <li>創建並部署自己的CORS代理（如Cloudflare Worker）</li>
-                        </ul>
-                    </div>
-                `;
-            } finally {
-                clearProcessingTimeout();
-                showLoading(false); // 確保無論成功或失敗都隱藏 loading
+                    document.getElementById('error-alert').classList.add('hidden');
+                    document.getElementById('success-alert').classList.add('hidden');
+
+                    const result = await diagnoseNotionConnection(token, dbId);
+                    
+                    if (result.success) {
+                        showSuccess("連接測試成功！", result.message);
+                    } else {
+                        showError("連接測試失敗", result.error);
+                    }
+                });
             }
-        }
+
+            const closeErrorButton = document.getElementById('close-error');
+            if (closeErrorButton) {
+                closeErrorButton.addEventListener('click', () => {
+                    document.getElementById('error-alert').classList.add('hidden');
+                });
+            }
+
+            const closeSuccessButton = document.getElementById('close-success');
+            if (closeSuccessButton) {
+                closeSuccessButton.addEventListener('click', () => {
+                    document.getElementById('success-alert').classList.add('hidden');
+                });
+            }
+        });
     </script>
 </body>
 </html>
