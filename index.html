@@ -206,7 +206,7 @@
                     <p id="success-details" class="text-sm"></p>
                 </div>
                 <button id="close-success" class="ml-auto">
-                    <svg class="h-5 w-5" fill="none" viewBox="0 24 24" stroke="currentColor">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                 </button>
@@ -237,41 +237,211 @@
         const PROCESSING_TIMEOUT = 60000; // 60秒
         let processingTimeoutId = null;
         
-        // 改進 CORS 代理選擇邏輯
+        // 1. 改進 getWorkingProxy 函式，預設返回第一個代理
         async function getWorkingProxy() {
             try {
+                // 檢查自定義代理
                 const customProxy = document.getElementById('cors-proxy')?.value?.trim();
                 if (customProxy) {
                     return customProxy.endsWith('/') ? customProxy : customProxy + '/';
                 }
-                
+
+                // 測試每個預設代理
                 for (const proxy of DEFAULT_PROXIES) {
                     try {
                         const testUrl = `${proxy}https://httpbin.org/get`;
                         const controller = new AbortController();
                         const timeoutId = setTimeout(() => controller.abort(), 5000);
-                        
+
                         const response = await fetch(testUrl, {
                             method: 'GET',
                             signal: controller.signal
                         });
-                        
+
                         clearTimeout(timeoutId);
-                        
+
                         if (response.ok) {
                             console.log(`使用代理: ${proxy}`);
                             return proxy;
                         }
                     } catch (error) {
-                        console.log(`代理 ${proxy} 不可用`, error);
+                        console.warn(`代理 ${proxy} 不可用:`, error.message);
                     }
                 }
+                
+                // 如果所有代理都失敗，預設返回第一個代理並顯示警告
+                console.warn("所有代理測試失敗，使用預設代理:", DEFAULT_PROXIES[0]);
+                return DEFAULT_PROXIES[0];
             } catch (error) {
                 console.error("選擇代理時出錯:", error);
+                // 發生錯誤時仍返回第一個代理
+                return DEFAULT_PROXIES[0];
+            }
+        }
+
+        // 2. 增強 callNotionAPI 函式
+        async function callNotionAPI(endpoint, method = 'GET', data = null, notionToken = null, retryCount = 3) {
+            if (!notionToken) {
+                notionToken = document.getElementById('notion-token')?.value;
+                if (!notionToken) {
+                    throw new Error("缺少Notion API密鑰");
+                }
             }
             
-            console.warn("所有代理都不可用，使用默認代理");
-            return DEFAULT_PROXIES[0];
+            try {
+                // 獲取代理
+                const proxy = await getWorkingProxy();
+                const apiUrl = `${proxy}${NOTION_API_BASE}${endpoint}`;
+                
+                // 準備請求選項
+                const options = {
+                    method: method,
+                    headers: {
+                        'Authorization': `Bearer ${notionToken}`,
+                        'Notion-Version': NOTION_VERSION,
+                        'Content-Type': 'application/json'
+                    }
+                };
+                
+                // 如果有資料，轉換為JSON
+                if (data) {
+                    options.body = JSON.stringify(data);
+                }
+                
+                // 發送請求
+                const response = await fetch(apiUrl, options);
+                
+                // 檢查響應狀態
+                if (!response.ok) {
+                    // 嘗試解析錯誤響應
+                    let errorMessage;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.message || `HTTP錯誤 ${response.status}`;
+                    } catch (e) {
+                        errorMessage = `HTTP錯誤 ${response.status}`;
+                    }
+                    
+                    // 創建帶有HTTP狀態碼的錯誤對象
+                    const error = new Error(errorMessage);
+                    error.status = response.status;
+                    error.endpoint = endpoint;
+                    throw error;
+                }
+                
+                // 返回成功響應的JSON數據
+                return await response.json();
+                
+            } catch (error) {
+                // 處理重試邏輯
+                if (retryCount > 0 && (!error.status || error.status >= 500)) {
+                    console.warn(`API呼叫失敗，重試中 (${retryCount} 次餘額)...`, error.message);
+                    // 延遲1秒後重試
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    return callNotionAPI(endpoint, method, data, notionToken, retryCount - 1);
+                }
+                
+                // 詳細記錄錯誤
+                console.error("Notion API呼叫失敗:", error);
+                
+                // 處理特定錯誤碼
+                if (error.status === 401) {
+                    throw new Error("API密鑰無效或過期");
+                } else if (error.status === 404) {
+                    throw new Error("找不到資源，請檢查資料庫ID是否正確");
+                } else if (error.status === 403) {
+                    throw new Error("無權限訪問此資源，請確保API密鑰有足夠權限");
+                }
+                
+                // 重新拋出其他錯誤
+                throw error;
+            }
+        }
+
+        // 3. 重構 diagnoseNotionConnection 函式
+        async function diagnoseNotionConnection(notionToken, databaseId) {
+            try {
+                // 步驟 1: 測試 API 密鑰有效性
+                console.log("測試 API 密鑰...");
+                try {
+                    const userData = await callNotionAPI('/users/me', 'GET', null, notionToken);
+                    console.log("API 密鑰有效，用戶資訊:", userData);
+                } catch (error) {
+                    if (error.message.includes("API密鑰無效")) {
+                        return { success: false, error: "API 密鑰無效或過期" };
+                    }
+                    return { success: false, error: `API 連接錯誤: ${error.message}` };
+                }
+                
+                // 步驟 2: 測試資料庫訪問
+                console.log("測試資料庫訪問...");
+                let dbData;
+                try {
+                    dbData = await callNotionAPI(`/databases/${databaseId}`, 'GET', null, notionToken);
+                    console.log("資料庫訪問成功:", dbData.title);
+                } catch (error) {
+                    if (error.message.includes("找不到資源")) {
+                        return { success: false, error: "找不到資料庫，請檢查資料庫 ID 是否正確" };
+                    } else if (error.message.includes("無權限")) {
+                        return { success: false, error: "沒有權限訪問此資料庫，請確保已共享給您的整合" };
+                    }
+                    return { success: false, error: `資料庫訪問錯誤: ${error.message}` };
+                }
+                
+                // 步驟 3: 檢查資料庫結構
+                const requiredProperties = ['名稱', '金額', '日期', '類別', '備註', '付款方式'];
+                const missingProperties = [];
+                
+                for (const prop of requiredProperties) {
+                    if (!dbData.properties[prop]) {
+                        missingProperties.push(prop);
+                    }
+                }
+                
+                if (missingProperties.length > 0) {
+                    return { 
+                        success: false, 
+                        error: `資料庫缺少必要欄位: ${missingProperties.join(', ')}` 
+                    };
+                }
+                
+                return { success: true, message: "連接成功！API 密鑰有效，資料庫可訪問，結構正確。" };
+                
+            } catch (error) {
+                console.error("診斷過程中發生錯誤:", error);
+                return { success: false, error: `診斷過程中發生錯誤: ${error.message}` };
+            }
+        }
+
+        // 5. 改進 showLoading 函式，檢查 loadingDiv 是否存在
+        function showLoading(message = "處理中，請稍候...") {
+            const loadingDiv = document.getElementById('loading');
+            if (!loadingDiv) {
+                console.error("找不到loading元素");
+                return;
+            }
+            
+            const loadingText = loadingDiv.querySelector('.loading-text');
+            if (loadingText) {
+                loadingText.textContent = message;
+            }
+            
+            loadingDiv.style.display = 'flex';
+            
+            // 設置超時處理
+            clearTimeout(processingTimeoutId);
+            processingTimeoutId = setTimeout(() => {
+                hideLoading();
+                showError("處理超時", "操作花費太長時間，請重試或聯繫支持");
+            }, PROCESSING_TIMEOUT);
+        }
+
+        function hideLoading() {
+            const loadingDiv = document.getElementById('loading');
+            if (loadingDiv) {
+                loadingDiv.style.display = 'none';
+            }
+            clearTimeout(processingTimeoutId);
         }
 
         // 顯示錯誤訊息
@@ -279,12 +449,12 @@
             const errorAlert = document.getElementById('error-alert');
             const errorMessage = document.getElementById('error-message');
             const errorDetails = document.getElementById('error-details');
-            
+
             errorMessage.textContent = message;
             errorDetails.textContent = details;
-            
+
             errorAlert.classList.remove('hidden');
-            
+
             setTimeout(() => {
                 errorAlert.classList.add('hidden');
             }, 5000);
@@ -301,202 +471,301 @@
             
             successAlert.classList.remove('hidden');
             
+            // 5秒後自動隱藏
             setTimeout(() => {
                 successAlert.classList.add('hidden');
             }, 5000);
         }
 
-        // 改進 API 請求的詳細日誌和錯誤處理
-        async function callNotionAPI(endpoint, method, token, body = null) {
-            try {
-                const proxy = await getWorkingProxy();
-                if (!proxy) {
-                    throw new Error("無法選擇有效的代理");
-                }
+        // 4. 更新 DOMContentLoaded 事件監聽器
+        document.addEventListener('DOMContentLoaded', function() {
+            // 獲取DOM元素
+            const uploadSection = document.getElementById('upload-section');
+            const previewSection = document.getElementById('preview-section');
+            const resultSection = document.getElementById('result-section');
+            const uploadButton = document.getElementById('upload-button');
+            const imageUploadButton = document.getElementById('image-upload-button');
+            const pdfUpload = document.getElementById('pdf-upload');
+            const dropZone = document.getElementById('drop-zone');
+            const backToUploadBtn = document.getElementById('back-to-upload');
+            const proceedToSubmitBtn = document.getElementById('proceed-to-submit');
+            const newUploadBtn = document.getElementById('new-upload');
+            const testConnectionBtn = document.getElementById('test-connection');
+            const closeErrorBtn = document.getElementById('close-error');
+            const closeSuccessBtn = document.getElementById('close-success');
 
-                const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
-                console.log(`API請求: ${method} ${url}`, body ? `Body: ${JSON.stringify(body)}` : "");
+            // 步驟導航
+            const step1 = document.getElementById('step1');
+            const step2 = document.getElementById('step2');
+            const step3 = document.getElementById('step3');
+            
+            // 檢查必要元素是否存在
+            if (!uploadSection || !previewSection || !resultSection || !uploadButton || 
+                !pdfUpload || !dropZone || !backToUploadBtn || !proceedToSubmitBtn || 
+                !newUploadBtn || !testConnectionBtn) {
+                console.error("找不到必要的DOM元素");
+                return;
+            }
 
-                const headers = {
-                    'Authorization': `Bearer ${token}`,
-                    'Notion-Version': NOTION_VERSION,
-                    'Content-Type': 'application/json'
-                };
-
-                const options = {
-                    method: method,
-                    headers: headers
-                };
-
-                if (body) {
-                    options.body = JSON.stringify(body);
-                }
-
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000);
-                options.signal = controller.signal;
-
-                let response;
-                try {
-                    response = await fetch(url, options);
-                    clearTimeout(timeoutId);
-                } catch (error) {
-                    clearTimeout(timeoutId);
-                    if (error.name === 'AbortError') {
-                        console.error("API請求超時:", url);
-                        throw new Error("API請求超時");
-                    }
-                    console.error("網路錯誤或請求中止:", error.message, url);
-                    throw new Error(`網路錯誤或請求中止: ${error.message}`);
-                }
-
-                if (!response.ok) {
-                    let errorData;
-                    let errorMessage = `HTTP 錯誤 ${response.status}: ${response.statusText}`;
-                    try {
-                        errorData = await response.json();
-                        if (errorData && errorData.message) {
-                            errorMessage = `API 錯誤: ${errorData.message}`;
-                        } else if (errorData && errorData.code) {
-                            errorMessage = `API 錯誤 (${errorData.code}): ${errorData.message || '未知Notion錯誤'}`;
-                        }
-                        console.error("API響應錯誤 (JSON):", errorData, "Status:", response.status);
-                    } catch (e) {
-                        try {
-                            const textError = await response.text();
-                            errorMessage = `API 錯誤 ${response.status}: ${textError.substring(0, 200)}`;
-                            console.error("API響應錯誤 (Text):", textError, "Status:", response.status);
-                        } catch (textE) {
-                            console.error("無法解析API錯誤響應", "Status:", response.status);
-                        }
-                    }
-                    throw new Error(errorMessage);
-                }
-
-                if (response.headers.get("content-length") === "0" || response.status === 204) {
-                    return null; 
+            // 上傳按鈕點擊處理
+            uploadButton.addEventListener('click', function() {
+                pdfUpload.click();
+            });
+            
+            // 處理PDF文件上傳
+            pdfUpload.addEventListener('change', async function(e) {
+                if (e.target.files.length === 0) return;
+                
+                const file = e.target.files[0];
+                if (file.type !== 'application/pdf') {
+                    showError("檔案格式錯誤", "請上傳PDF檔案");
+                    return;
                 }
                 
+                showLoading("正在解析PDF檔案...");
+                
                 try {
-                    return await response.json();
-                } catch (jsonParseError) {
-                    console.error("無法解析成功的API響應為JSON:", jsonParseError);
-                    throw new Error("API響應成功，但無法解析JSON內容");
-                }
+                    // 在這裡處理PDF解析邏輯
+                    // ...
 
-            } catch (error) { 
-                console.error('API調用最終錯誤:', error.message);
-                showError('API 調用失敗', error.message || '發生未知錯誤');
-                throw error; 
-            }
-        }
-
-        // 重構 Notion 連接診斷邏輯，使用 callNotionAPI
-        async function diagnoseNotionConnection(notionToken, databaseId) {
-            console.log("開始 Notion 連接診斷...");
-            showLoading(true, "正在測試連接...");
-
-            try {
-                console.log("步驟 1: 測試 API 金鑰有效性 (users/me)...");
-                try {
-                    await callNotionAPI('users/me', 'GET', notionToken);
-                    console.log("API 金鑰有效。");
-                } catch (e) {
-                    return { success: false, error: `API 金鑰測試失敗: ${e.message}. 請檢查您的 API 金鑰是否正確且具有所需權限。` };
-                }
-
-                console.log(`步驟 2: 測試資料庫訪問 (${databaseId})...`);
-                let dbData;
-                try {
-                    dbData = await callNotionAPI(`databases/${databaseId}`, 'GET', notionToken);
-                    if (!dbData) {
-                        throw new Error("成功獲取資料庫，但未返回數據。");
-                    }
-                    console.log("資料庫可訪問。");
-                } catch (e) {
-                    return { success: false, error: `資料庫訪問測試失敗: ${e.message}. 請檢查資料庫ID是否正確，以及您的 Notion Integration 是否已共享給此資料庫並具有讀取權限。` };
-                }
-
-                console.log("步驟 3: 檢查資料庫結構...");
-                const requiredProperties = ['名稱', '金額', '日期', '類別', '備註', '付款方式'];
-                const missingProperties = [];
-                const dbProperties = dbData.properties || {};
-
-                for (const propName of requiredProperties) {
-                    if (!dbProperties[propName]) {
-                        missingProperties.push(propName);
-                    }
-                }
-
-                if (missingProperties.length > 0) {
-                    const errorMsg = `資料庫結構檢查失敗: 缺少必要欄位: ${missingProperties.join(', ')}。請確保資料庫包含這些欄位 (且名稱完全匹配)：${requiredProperties.join(', ')}。`;
-                    console.warn(errorMsg);
-                    return { success: false, error: errorMsg };
-                }
-                console.log("資料庫結構有效。");
-
-                return { success: true, message: "連接成功！API 金鑰有效，資料庫可訪問且結構正確。" };
-
-            } catch (error) {
-                console.error("診斷過程中發生未預期錯誤:", error);
-                return { success: false, error: `診斷過程中發生意外錯誤: ${error.message}` };
-            } finally {
-                showLoading(false);
-            }
-        }
-
-        function showLoading(isLoading, message = "處理中，請稍候...") {
-            const loadingDiv = document.getElementById('loading');
-            if (!loadingDiv) return;
-            const loadingText = loadingDiv.querySelector('.loading-text');
-            
-            if (isLoading) {
-                if (loadingText) loadingText.textContent = message;
-                loadingDiv.style.display = 'flex';
-            } else {
-                loadingDiv.style.display = 'none';
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const testConnectionButton = document.getElementById('test-connection');
-            if (testConnectionButton) {
-                testConnectionButton.addEventListener('click', async () => {
-                    const token = document.getElementById('notion-token').value;
-                    const dbId = document.getElementById('database-id').value;
-
-                    if (!token || !dbId) {
-                        showError("請輸入 Notion API 金鑰和資料庫 ID。");
-                        return;
-                    }
+                    // 顯示預覽部分
+                    uploadSection.classList.add('hidden');
+                    previewSection.classList.remove('hidden');
+                    step1.classList.remove('text-blue-600', 'border-blue-600');
+                    step1.classList.add('text-gray-400', 'border-gray-200');
+                    step2.classList.remove('text-gray-400', 'border-gray-200');
+                    step2.classList.add('text-blue-600', 'border-blue-600');
                     
-                    document.getElementById('error-alert').classList.add('hidden');
-                    document.getElementById('success-alert').classList.add('hidden');
-
-                    const result = await diagnoseNotionConnection(token, dbId);
+                    hideLoading();
+                } catch (error) {
+                    hideLoading();
+                    showError("PDF解析失敗", error.message);
+                    console.error("PDF解析錯誤:", error);
+                }
+            });
+            
+            // 處理圖片上傳按鈕點擊
+            imageUploadButton.addEventListener('click', function() {
+                // 創建臨時文件輸入元素
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                
+                // 監聽文件選擇
+                input.addEventListener('change', async function(e) {
+                    if (e.target.files.length === 0) return;
+                    
+                    const file = e.target.files[0];
+                    showLoading("正在處理圖片...");
+                    
+                    try {
+                        // 在這裡處理圖片OCR邏輯
+                        // ...
+                        
+                        // 顯示預覽部分
+                        uploadSection.classList.add('hidden');
+                        previewSection.classList.remove('hidden');
+                        step1.classList.remove('text-blue-600', 'border-blue-600');
+                        step1.classList.add('text-gray-400', 'border-gray-200');
+                        step2.classList.remove('text-gray-400', 'border-gray-200');
+                        step2.classList.add('text-blue-600', 'border-blue-600');
+                        
+                        hideLoading();
+                    } catch (error) {
+                        hideLoading();
+                        showError("圖片處理失敗", error.message);
+                        console.error("圖片處理錯誤:", error);
+                    }
+                });
+                
+                // 觸發文件選擇對話框
+                input.click();
+            });
+            
+            // 返回按鈕處理
+            backToUploadBtn.addEventListener('click', function() {
+                previewSection.classList.add('hidden');
+                uploadSection.classList.remove('hidden');
+                step2.classList.remove('text-blue-600', 'border-blue-600');
+                step2.classList.add('text-gray-400', 'border-gray-200');
+                step1.classList.remove('text-gray-400', 'border-gray-200');
+                step1.classList.add('text-blue-600', 'border-blue-600');
+            });
+            
+            // 送出按鈕處理
+            proceedToSubmitBtn.addEventListener('click', async function() {
+                const notionToken = document.getElementById('notion-token').value;
+                const databaseId = document.getElementById('database-id').value;
+                
+                if (!notionToken || !databaseId) {
+                    showError("請填寫必要欄位", "Notion API密鑰和資料庫ID為必填項");
+                    return;
+                }
+                
+                showLoading("正在送出至Notion...");
+                
+                try {
+                    // 在這裡處理送出至Notion的邏輯
+                    // ...
+                    
+                    // 顯示結果部分
+                    previewSection.classList.add('hidden');
+                    resultSection.classList.remove('hidden');
+                    step2.classList.remove('text-blue-600', 'border-blue-600');
+                    step2.classList.add('text-gray-400', 'border-gray-200');
+                    step3.classList.remove('text-gray-400', 'border-gray-200');
+                    step3.classList.add('text-blue-600', 'border-blue-600');
+                    
+                    // 更新結果內容
+                    document.getElementById('result-content').innerHTML = `
+                        <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+                            <svg class="h-12 w-12 text-green-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <h3 class="text-lg font-semibold text-center text-green-800">送出成功</h3>
+                            <p class="text-center text-green-700 mt-2">資料已成功送出至您的Notion資料庫</p>
+                        </div>
+                    `;
+                    
+                    hideLoading();
+                } catch (error) {
+                    hideLoading();
+                    showError("送出至Notion失敗", error.message);
+                    console.error("Notion送出錯誤:", error);
+                }
+            });
+            
+            // 上傳新檔案按鈕處理
+            newUploadBtn.addEventListener('click', function() {
+                resultSection.classList.add('hidden');
+                uploadSection.classList.remove('hidden');
+                step3.classList.remove('text-blue-600', 'border-blue-600');
+                step3.classList.add('text-gray-400', 'border-gray-200');
+                step1.classList.remove('text-gray-400', 'border-gray-200');
+                step1.classList.add('text-blue-600', 'border-blue-600');
+                
+                // 重置文件輸入
+                pdfUpload.value = '';
+            });
+            
+            // 測試連接按鈕點擊處理
+            testConnectionBtn.addEventListener('click', async function() {
+                const notionToken = document.getElementById('notion-token').value;
+                const databaseId = document.getElementById('database-id').value;
+                
+                if (!notionToken || !databaseId) {
+                    showError("請填寫必要欄位", "Notion API密鑰和資料庫ID為必填項");
+                    return;
+                }
+                
+                showLoading("測試Notion連接中...");
+                
+                try {
+                    const result = await diagnoseNotionConnection(notionToken, databaseId);
+                    hideLoading();
                     
                     if (result.success) {
-                        showSuccess("連接測試成功！", result.message);
+                        showSuccess("連接測試成功", result.message);
                     } else {
                         showError("連接測試失敗", result.error);
                     }
+                } catch (error) {
+                    hideLoading();
+                    showError("連接測試過程中出錯", error.message);
+                    console.error("連接測試錯誤:", error);
+                }
+            });
+            
+            // 拖放區域處理
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
                 });
-            }
-
-            const closeErrorButton = document.getElementById('close-error');
-            if (closeErrorButton) {
-                closeErrorButton.addEventListener('click', () => {
+            });
+            
+            // 拖放區域視覺效果
+            dropZone.addEventListener('dragenter', function() {
+                this.classList.add('border-blue-500');
+            });
+            
+            dropZone.addEventListener('dragleave', function() {
+                this.classList.remove('border-blue-500');
+            });
+            
+            dropZone.addEventListener('drop', function(e) {
+                this.classList.remove('border-blue-500');
+                
+                const file = e.dataTransfer.files[0];
+                if (!file) return;
+                
+                if (file.type === 'application/pdf') {
+                    pdfUpload.files = e.dataTransfer.files;
+                    const event = new Event('change');
+                    pdfUpload.dispatchEvent(event);
+                } else if (file.type.startsWith('image/')) {
+                    // 處理拖放的圖片
+                    const event = new Event('change');
+                    const input = document.createElement('input');
+                    input.files = e.dataTransfer.files;
+                    imageUploadButton.dispatchEvent(event);
+                } else {
+                    showError("不支援的檔案類型", "請上傳PDF檔案或圖片");
+                }
+            });
+            
+            // 關閉錯誤訊息
+            if (closeErrorBtn) {
+                closeErrorBtn.addEventListener('click', function() {
                     document.getElementById('error-alert').classList.add('hidden');
                 });
             }
-
-            const closeSuccessButton = document.getElementById('close-success');
-            if (closeSuccessButton) {
-                closeSuccessButton.addEventListener('click', () => {
+            
+            // 關閉成功訊息
+            if (closeSuccessBtn) {
+                closeSuccessBtn.addEventListener('click', function() {
                     document.getElementById('success-alert').classList.add('hidden');
                 });
             }
         });
+
+        // 更新商家分類對照表以匹配Notion中的固定類別
+        const categoryMap = {
+            // 生活用品
+            'SUPERMARKET': '生活用品', 'PARKNSHOP': '生活用品', 'WELLCOME': '生活用品',
+            'WATSONS': '生活用品', 'MARKET': '生活用品',
+
+            // 知識學習
+            'BOOKSTORE': '知識學習', 'COURSE': '知識學習', 'EDUCATION': '知識學習',
+
+            // 休閒娛樂
+            'MOVIE': '休閒娛樂', 'CINEMA': '休閒娛樂', 'NETFLIX': '休閒娛樂',
+            'SPOTIFY': '休閒娛樂', 'DISNEY': '休閒娛樂', 'GAME': '休閒娛樂',
+
+            // 交通
+            'UBER': '交通', 'TAXI': '交通', 'MTR': '交通', 'BUS': '交通',
+            'TRANSPORT': '交通', 'OCTOPUS': '交通',
+
+            // 健康醫療
+            'DOCTOR': '健康醫療', 'CLINIC': '健康醫療', 'HOSPITAL': '健康醫療',
+            'PHARMACY': '健康醫療', 'MEDICAL': '健康醫療',
+
+            // 訂閱
+            'SUBSCRIPTION': '訂閱', 'MAGAZINE': '訂閱', 'MEMBERSHIP': '訂閱',
+
+            // 固定支出
+            'RENT': '固定支出', 'MORTGAGE': '固定支出', 'LOAN': '固定支出',
+
+            // 美妝
+            'COSMETICS': '美妝', 'BEAUTY': '美妝', 'SKINCARE': '美妝',
+
+            // 服飾配件
+            'CLOTHING': '服飾配件', 'FASHION': '服飾配件', 'ACCESSORIES': '服飾配件',
+
+            // 餐飲
+            'CAFE': '餐飲', 'RESTAURANT': '餐飲', 'DINING': '餐飲', 'FOOD': '餐飲',
+            'BAKERY': '餐飲', 'COFFEE': '餐飲'
+        };
     </script>
 </body>
 </html>
