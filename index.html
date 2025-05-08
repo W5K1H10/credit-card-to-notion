@@ -237,41 +237,31 @@
         const PROCESSING_TIMEOUT = 60000; // 60秒
         let processingTimeoutId = null;
         
-        // 改進代理選擇邏輯
-        async function getWorkingProxy() {
+// 修改getWorkingProxy函數
+async function getWorkingProxy() {
     const customProxy = document.getElementById('cors-proxy')?.value?.trim();
     if (customProxy) {
+        // 確保自定義代理URL格式正確
         return customProxy.endsWith('?apiurl=') ? customProxy : customProxy + '?apiurl=';
     }
-        
-            try {
-                const customProxy = document.getElementById('cors-proxy')?.value?.trim();
-                if (customProxy) {
-                    console.log("使用自定義代理:", customProxy);
-                    return customProxy.endsWith('/') ? customProxy : customProxy + '/';
-                }
-        
-                console.log("正在測試默認CORS代理...");
-                for (const proxy of DEFAULT_PROXIES) {
-                    try {
-                        const testUrl = `${proxy}https://httpbin.org/get`;
-                        const response = await fetch(testUrl, { method: 'GET' });
-                        if (response.ok) {
-                            console.log(`代理可用: ${proxy}`);
-                            return proxy;
-                        }
-                    } catch (e) {
-                        console.warn(`代理不可用: ${proxy} (${e.message})`);
-                    }
-                }
-        
-                console.warn("所有CORS代理均不可用，回退到第一個代理");
-                return DEFAULT_PROXIES[0];
-            } catch (error) {
-                console.error("選擇代理出錯:", error);
-                return DEFAULT_PROXIES[0];
+    
+    // 測試並選擇默認代理
+    for (const proxy of DEFAULT_PROXIES) {
+        try {
+            const testUrl = `${proxy}https://httpbin.org/get`;
+            const response = await fetch(testUrl, { method: 'GET' });
+            if (response.ok) {
+                console.log(`代理可用: ${proxy}`);
+                return proxy;
             }
+        } catch (e) {
+            console.warn(`代理不可用: ${proxy}`);
         }
+    }
+    
+    // 如果所有代理都不可用，提供明確的錯誤提示
+    throw new Error('無法連接到任何CORS代理，請嘗試使用自定義代理或安裝CORS瀏覽器擴充功能');
+}
 
         // 顯示錯誤訊息
         function showError(message, details = "") {
@@ -454,17 +444,21 @@
 
         // 改進API請求函數，增加錯誤處理和重試機制
         async function callNotionAPI(endpoint, method, token, body = null) {
-            const MAX_RETRIES = 2;
-            let attempts = 0;
+    let attempts = 0;
+    const MAX_RETRIES = 2;
+    
+    while (attempts <= MAX_RETRIES) {
+        try {
+            attempts++;
+            // 添加更詳細的日誌
+            console.log(`API請求(${attempts}/${MAX_RETRIES+1}): ${endpoint}`);
             
-            while (attempts <= MAX_RETRIES) {
-                try {
-                    attempts++;
-                    const proxy = await getWorkingProxy();
-                    const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
-                    
-                    console.log(`API請求(${attempts}/${MAX_RETRIES+1}): ${method} ${url}`);
-                    if (body) console.log(`請求內容: ${JSON.stringify(body).substring(0, 200)}...`);
+            // 獲取代理並設置請求
+            const proxy = await getWorkingProxy();
+            const url = `${proxy}${NOTION_API_BASE}/${endpoint}`;
+            
+            // 顯示詳細的請求信息（但不記錄敏感數據）
+            if (body) console.log(`請求類型: ${method}, 端點: ${endpoint}`);
                     
                     const headers = {
                         'Authorization': `Bearer ${token}`,
@@ -533,24 +527,14 @@
                     }
                     
                 } catch (error) {
-                    console.error(`API請求錯誤(嘗試${attempts}/${MAX_RETRIES+1}):`, error);
-                    
-                    if (error.name === 'AbortError') {
-                        if (attempts <= MAX_RETRIES) {
-                            console.warn('請求超時，將重試...');
-                            continue; // 重試
-                        }
-                        throw new Error('API請求超時。請檢查您的網絡連接或稍後再試。');
-                    }
-                    
-                    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-                        if (attempts <= MAX_RETRIES) {
-                            console.warn('網絡請求失敗，將重試...');
-                            await new Promise(r => setTimeout(r, 2000)); // 等待2秒後重試
-                            continue; // 重試
-                        }
-                        throw new Error('網絡連接失敗。請檢查您的網絡連接並確保CORS代理正常工作。');
-                    }
+            // 更詳細的錯誤分類和用戶友好提示
+            if (error.name === 'AbortError') {
+                throw new Error('請求超時。請檢查您的網絡連接或稍後再試。');
+            }
+            
+            if (error.message.includes('Failed to fetch')) {
+                throw new Error('網絡連接失敗。請檢查CORS代理設置或使用CORS瀏覽器擴充功能。');
+            }
                     
                     // 如果已嘗試最大次數或不是應重試的錯誤，則拋出
                     if (attempts > MAX_RETRIES) {
@@ -1482,9 +1466,28 @@ function showLoading(show, text = '處理中，請稍候...') {
                 document.getElementById('current-operation').textContent = '驗證Notion API連接...';
                 const dbCheckResult = await diagnoseNotionConnection(notionToken, databaseId);
                 
-                if (!dbCheckResult.success) {
-                    throw new Error(`連接測試失敗: ${dbCheckResult.error}\n\n${dbCheckResult.details || ''}`);
-                }
+// 在診斷完成後添加具體的操作建議
+if (!dbCheckResult.success) {
+    let actionSuggestion = "";
+    
+    if (dbCheckResult.error.includes("API密鑰無效")) {
+        actionSuggestion = `
+            <div class="mt-2 p-2 bg-blue-50 rounded">
+                <p class="font-bold">操作建議：</p>
+                <ol class="list-decimal ml-5">
+                    <li>在 <a href="https://www.notion.so/my-integrations" target="_blank" class="text-blue-600 underline">Notion整合設置頁面</a> 檢查或創建新的API密鑰</li>
+                    <li>確保密鑰以 "secret_" 開頭</li>
+                    <li>複製完整的密鑰，不要有多餘空格</li>
+                </ol>
+            </div>
+        `;
+    } else if (dbCheckResult.error.includes("找不到資料庫")) {
+        // 其他問題的具體指引...
+    }
+    
+    // 將操作建議添加到錯誤信息中
+    resultContent.innerHTML += actionSuggestion;
+}
                 
                 // 更新進度顯示
                 document.getElementById('progress-text').textContent = `0/${transactions.length} 筆交易已處理`;
